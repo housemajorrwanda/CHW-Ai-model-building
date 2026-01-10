@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["python311"]
+
+[phases.install]
+cmds = [
+  "apt-get update && apt-get install -y tesseract-ocr libtesseract-dev poppler-utils libglib2.0-0 || true",
+  "python -m ensurepip --upgrade",
+  "python -m pip install --upgrade pip",
+  "python -m pip install -r requirements.txt"
+]
+
+[start]
+cmd = "python -m uvicorn api:app --host 0.0.0.0 --port $PORT"
+
