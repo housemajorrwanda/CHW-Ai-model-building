@@ -62,12 +62,18 @@ export function AnswerEditor({
     immediatelyRender: false,
   });
 
-  // Update editor when answer changes externally
+  // Update editor when answer or questionNumber changes externally
   useEffect(() => {
-    if (editor && answer && editor.getHTML() !== answer) {
-      editor.commands.setContent(answer, { emitUpdate: false });
+    if (editor) {
+      const currentContent = editor.getHTML();
+      const newContent = answer || '<p>Type your answer here...</p>';
+      
+      // Only update if content is different to avoid unnecessary updates
+      if (currentContent !== newContent) {
+        editor.commands.setContent(newContent, { emitUpdate: false });
+      }
     }
-  }, [answer, editor]);
+  }, [answer, questionNumber, editor]);
 
   const insertMath = () => {
     const latex = prompt('Enter LaTeX formula (e.g., x^2 + 2x + 1):');
@@ -198,10 +204,6 @@ export function AnswerEditor({
       <div className="border rounded-lg bg-background focus-within:ring-2 focus-within:ring-primary/20 overflow-hidden">
         <EditorContent editor={editor} className="prose-editor-expand" />
       </div>
-      
-      <p className="text-xs text-muted-foreground">
-        Tip: Use the <Calculator className="h-3 w-3 inline" /> button for scientific symbols, or the Σ button to insert mathematical formulas in LaTeX format. The editor will expand as you type.
-      </p>
     </div>
   );
 }

@@ -18,6 +18,8 @@ class SubmissionStatus(str, Enum):
     PENDING = "pending"
     GRADING = "grading"
     GRADED = "graded"
+    AWAITING_APPROVAL = "awaiting_approval"
+    APPROVED = "approved"
 
 
 class CourseLevel(str, Enum):
@@ -268,6 +270,18 @@ class QuestionResponse(BaseModel):
     text: str
     points: int
     goldSolution: GoldSolutionResponse
+    # Additional fields for frontend compatibility
+    goldSolutionSteps: Optional[List[GoldSolutionStepResponse]] = None
+    finalAnswer: Optional[str] = None
+    finalAnswerLatex: Optional[str] = None
+    questionType: Optional[str] = "standard"
+    richContent: Optional[dict] = None
+    outlineLevel: Optional[int] = 1
+    parentQuestionId: Optional[str] = None
+    subQuestions: Optional[List['QuestionResponse']] = []
+    attachments: Optional[List] = []
+    embeddedContent: Optional[List] = []
+    theories: Optional[List] = []
     
     class Config:
         from_attributes = True

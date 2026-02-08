@@ -77,7 +77,7 @@ export function MediaUploader({ onImageUpload, onAttachmentAdd }: MediaUploaderP
             {isDragActive ? 'Drop files here' : 'Drag & drop files here'}
           </p>
           <p className="text-xs text-muted-foreground">
-            or click to browse (Images, PDFs)
+            Click to browse (Images, PDFs)
           </p>
         </div>
       </TabsContent>

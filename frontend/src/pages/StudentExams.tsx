@@ -68,10 +68,10 @@ export default function StudentExams() {
       return { status: 'available', label: 'Available', color: 'default' };
     }
 
-    if (submission.status === 'graded') {
+    if (submission.status === 'graded' || submission.status === 'approved') {
       return { status: 'graded', label: 'Graded', color: 'default', submission };
     }
-    if (submission.status === 'grading') {
+    if (submission.status === 'grading' || submission.status === 'awaiting_approval') {
       return { status: 'grading', label: 'Grading', color: 'secondary', submission };
     }
     return { status: 'pending', label: 'Submitted', color: 'secondary', submission };

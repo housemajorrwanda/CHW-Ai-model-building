@@ -140,7 +140,12 @@ class MathGrader:
                 best_gold_index = gold_idx
         
         # Determine status and points
-        if best_score >= 1.0:  # Exact or equivalent match
+        if best_gold_index is None:
+            # No match found at all
+            status = StepStatus.INCORRECT
+            points = 0.0
+            feedback = "Incorrect or not matching any expected step"
+        elif best_score >= 1.0:  # Exact or equivalent match
             status = StepStatus.CORRECT
             points = self.gold_steps[best_gold_index].points
             feedback = f"Correct: matches step {best_gold_index + 1}"
@@ -153,7 +158,7 @@ class MathGrader:
         else:
             status = StepStatus.INCORRECT
             points = 0.0
-            feedback = "Incorrect or not matching any expected step"
+            feedback = f"Incorrect: low similarity ({best_score:.2f})"
         
         # Penalize if required earlier steps were missed
         if missing_required and status != StepStatus.INCORRECT:
@@ -186,6 +191,25 @@ class MathGrader:
                     return True
         return False
     
+    def _normalize_math_text(self, text: str) -> str:
+        """Normalize mathematical text for comparison"""
+        # Normalize whitespace
+        text = ' '.join(text.split())
+        
+        # Normalize common math symbols
+        # Replace different minus/hyphen variants with standard -
+        text = text.replace('−', '-').replace('–', '-').replace('—', '-')
+        # Replace multiplication symbols
+        text = text.replace('·', '*').replace('×', '*').replace('×', '*')
+        # Replace division symbols
+        text = text.replace('÷', '/')
+        # Normalize superscripts (basic handling)
+        text = text.replace('²', '^2').replace('³', '^3')
+        # Normalize spaces around operators
+        text = re.sub(r'\s*([+\-*/=])\s*', r'\1', text)
+        
+        return text.strip()
+    
     def _compare_steps(self, student_step: str, gold_step: str) -> Tuple[float, str]:
         """
         Compare a student step with a gold step.
@@ -193,28 +217,58 @@ class MathGrader:
         Returns:
             Tuple of (score 0-1, match_type description)
         """
-        # Normalize whitespace
+        # Normalize whitespace and remove LaTeX delimiters for comparison
         student_step = student_step.strip()
         gold_step = gold_step.strip()
         
-        # 1. Exact match
-        if student_step == gold_step:
+        # Remove LaTeX delimiters for text comparison
+        student_clean = re.sub(r'^\$\$?(.*?)\$\$?$', r'\1', student_step)
+        gold_clean = re.sub(r'^\$\$?(.*?)\$\$?$', r'\1', gold_step)
+        
+        # Normalize math symbols for better matching
+        student_normalized = self._normalize_math_text(student_clean)
+        gold_normalized = self._normalize_math_text(gold_clean)
+        
+        # 1. Exact match (after cleaning)
+        if student_step == gold_step or student_clean == gold_clean:
             return (1.0, "exact match")
         
-        # 2. Try mathematical equivalence
-        math_score = self._check_mathematical_equivalence(student_step, gold_step)
+        # 1.5. Normalized exact match
+        if student_normalized == gold_normalized:
+            return (1.0, "normalized exact match")
+        
+        # 2. Try mathematical equivalence (using normalized versions)
+        math_score = self._check_mathematical_equivalence(student_normalized, gold_normalized)
         if math_score > 0:
             return (math_score, "mathematically equivalent")
         
+        # Also try with original (in case normalization broke something)
+        if math_score == 0:
+            math_score = self._check_mathematical_equivalence(student_step, gold_step)
+            if math_score > 0:
+                return (math_score, "mathematically equivalent (original)")
+        
         # 3. Check if it's a valid intermediate derivation
-        derivation_score = self._check_derivation(student_step, gold_step)
+        derivation_score = self._check_derivation(student_normalized, gold_normalized)
         if derivation_score > 0:
             return (derivation_score, "valid intermediate derivation")
         
-        # 4. Partial text similarity (for explanations)
-        text_similarity = self._text_similarity(student_step, gold_step)
-        if text_similarity > 0.7:
-            return (text_similarity * 0.8, "similar explanation")
+        # 4. Check if one contains the other (for partial matches)
+        # Use normalized versions for better matching
+        student_core = re.sub(r'[=+\-*/()\[\]{}]', '', student_normalized.lower())
+        gold_core = re.sub(r'[=+\-*/()\[\]{}]', '', gold_normalized.lower())
+        
+        if student_core and gold_core:
+            if gold_core in student_core or student_core in gold_core:
+                # Calculate overlap ratio
+                overlap = min(len(student_core), len(gold_core)) / max(len(student_core), len(gold_core))
+                if overlap > 0.6:
+                    return (overlap * 0.7, "contains matching content")
+        
+        # 5. Partial text similarity (for explanations) - use normalized
+        text_similarity = self._text_similarity(student_normalized, gold_normalized)
+        if text_similarity > 0.5:  # Lowered threshold from 0.7
+            return (text_similarity * 0.6, "similar explanation")
         
         return (0.0, "no match")
     
@@ -233,7 +287,35 @@ class MathGrader:
             if student_expr is None or gold_expr is None:
                 return 0.0
             
-            # Check if they simplify to the same expression
+            # Handle equations separately
+            if isinstance(student_expr, Eq) and isinstance(gold_expr, Eq):
+                # Compare both sides of equations
+                lhs_diff = simplify(student_expr.lhs - gold_expr.lhs)
+                rhs_diff = simplify(student_expr.rhs - gold_expr.rhs)
+                
+                if lhs_diff == 0 and rhs_diff == 0:
+                    return 1.0
+                
+                # Check if differences are numerically close to zero
+                try:
+                    if abs(float(lhs_diff)) < self.tolerance and abs(float(rhs_diff)) < self.tolerance:
+                        return 1.0
+                except:
+                    pass
+                
+                # Check if equations are equivalent (e.g., x = 2 vs 2 = x)
+                if simplify(student_expr.lhs - gold_expr.rhs) == 0 and \
+                   simplify(student_expr.rhs - gold_expr.lhs) == 0:
+                    return 1.0
+                
+                return 0.0
+            
+            # Handle one equation and one expression
+            if isinstance(student_expr, Eq) or isinstance(gold_expr, Eq):
+                # If one is an equation and the other isn't, they can't be equivalent
+                return 0.0
+            
+            # Both are expressions - check if they simplify to the same
             diff = simplify(student_expr - gold_expr)
             
             # If difference is zero (or very close), they're equivalent
@@ -247,11 +329,11 @@ class MathGrader:
             except:
                 pass
             
-            # Check if they're equal as equations
-            if isinstance(student_expr, Eq) and isinstance(gold_expr, Eq):
-                if simplify(student_expr.lhs - gold_expr.lhs) == 0 and \
-                   simplify(student_expr.rhs - gold_expr.rhs) == 0:
-                    return 1.0
+            # Try comparing simplified forms
+            student_simplified = simplify(student_expr)
+            gold_simplified = simplify(gold_expr)
+            if student_simplified == gold_simplified:
+                return 1.0
             
         except Exception as e:
             # If parsing fails, they're not equivalent expressions
@@ -301,32 +383,89 @@ class MathGrader:
     def _parse_expression(self, text: str):
         """
         Try to parse a text string as a mathematical expression.
+        Handles LaTeX, plain text, and equations.
         
         Returns:
             SymPy expression or None if parsing fails
         """
+        if not text or not text.strip():
+            return None
+            
+        # Remove LaTeX delimiters if present
+        text = re.sub(r'^\$\$?(.*?)\$\$?$', r'\1', text.strip())
+        text = re.sub(r'^\\\[(.*?)\\\]$', r'\1', text)
+        text = re.sub(r'^\\\((.*?)\\\)$', r'\1', text)
+        
         # Remove common prefixes like "=", "Step:", etc.
-        text = re.sub(r'^(step\s*\d*:?\s*|=)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'^(step\s*\d*:?\s*|solution:?\s*|answer:?\s*)', '', text, flags=re.IGNORECASE)
         text = text.strip()
+        
+        # Normalize common math functions (case-insensitive)
+        # Convert LaTeX function commands to standard names
+        function_map = {
+            r'\\sin': 'sin',
+            r'\\cos': 'cos',
+            r'\\tan': 'tan',
+            r'\\sec': 'sec',
+            r'\\csc': 'csc',
+            r'\\cot': 'cot',
+            r'\\arcsin': 'asin',
+            r'\\arccos': 'acos',
+            r'\\arctan': 'atan',
+            r'\\ln': 'log',  # Natural log
+            r'\\log': 'log',
+            r'\\exp': 'exp',
+        }
+        for latex_cmd, sympy_name in function_map.items():
+            text = re.sub(latex_cmd + r'\(', sympy_name + '(', text, flags=re.IGNORECASE)
+            text = re.sub(latex_cmd + r'\{', sympy_name + '(', text, flags=re.IGNORECASE)
+        
+        # Also handle plain text versions (case-insensitive)
+        text = re.sub(r'\bsin\s*\(', 'sin(', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bcos\s*\(', 'cos(', text, flags=re.IGNORECASE)
+        text = re.sub(r'\btan\s*\(', 'tan(', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bln\s*\(', 'log(', text, flags=re.IGNORECASE)
+        
+        # Convert common LaTeX commands to SymPy-friendly format
+        # Handle fractions: \frac{a}{b} -> (a)/(b)
+        text = re.sub(r'\\frac\{([^}]+)\}\{([^}]+)\}', r'(\1)/(\2)', text)
+        # Handle sqrt: \sqrt{x} -> sqrt(x)
+        text = re.sub(r'\\sqrt\{([^}]+)\}', r'sqrt(\1)', text)
+        text = re.sub(r'\\sqrt\[(\d+)\]\{([^}]+)\}', r'root(\1, \2)', text)
+        # Handle powers: x^{n} -> x**n or x^n -> x**n
+        text = re.sub(r'\{([^}]+)\}\^\{([^}]+)\}', r'(\1)**(\2)', text)
+        text = re.sub(r'([a-zA-Z0-9\)]+)\^\{([^}]+)\}', r'\1**(\2)', text)
+        text = re.sub(r'([a-zA-Z0-9\)]+)\^([0-9]+)', r'\1**\2', text)
+        # Handle subscripts: x_{n} -> x_n (SymPy handles this)
+        text = re.sub(r'\{([^}]+)\}_\{([^}]+)\}', r'\1_\2', text)
+        text = re.sub(r'([a-zA-Z0-9\)]+)_\{([^}]+)\}', r'\1_\2', text)
+        # Remove remaining LaTeX braces
+        text = re.sub(r'\{([^}]+)\}', r'\1', text)
+        # Handle multiplication: \cdot, \times -> *
+        text = re.sub(r'\\cdot|\\times', '*', text)
+        # Handle division: \div -> /
+        text = re.sub(r'\\div', '/', text)
         
         # Try to extract mathematical expressions
         # Look for equations (contains =)
         if '=' in text:
             parts = text.split('=', 1)
             try:
-                lhs = parse_expr_safe(parts[0].strip(), transformations='all')
-                rhs = parse_expr_safe(parts[1].strip(), transformations='all')
+                lhs_str = parts[0].strip()
+                rhs_str = parts[1].strip()
+                lhs = parse_expr_safe(lhs_str, transformations='all')
+                rhs = parse_expr_safe(rhs_str, transformations='all')
                 return Eq(lhs, rhs)
-            except:
+            except Exception as e:
+                # If parsing as equation fails, try to parse as single expression
                 pass
         
         # Try as single expression
         try:
             return parse_expr_safe(text, transformations='all')
-        except:
-            pass
-        
-        return None
+        except Exception as e:
+            # If parsing fails, return None
+            return None
     
     def _text_similarity(self, text1: str, text2: str) -> float:
         """

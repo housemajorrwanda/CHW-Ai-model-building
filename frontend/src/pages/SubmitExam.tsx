@@ -192,7 +192,7 @@ export default function SubmitExam() {
               />
               <label htmlFor="file-upload" className="cursor-pointer">
                 <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
-                <p className="font-medium mb-1">Drop images here or click to upload</p>
+                <p className="font-medium mb-1">Drop images or click to upload</p>
                 <p className="text-sm text-muted-foreground">
                   Supports JPG, PNG, HEIC • Max 10MB per file
                 </p>

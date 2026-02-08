@@ -1,13 +1,24 @@
 """
 Matching Engine - Compares student steps to gold steps
 Uses multiple strategies to determine equivalence
+Enhanced with ML-based matching from Rwanda exam dataset
 """
 import re
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 from difflib import SequenceMatcher
 import logging
+import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Try to import ML matcher
+try:
+    from .ml_matcher import MLMatcher
+    ML_MATCHER_AVAILABLE = True
+except ImportError:
+    ML_MATCHER_AVAILABLE = False
+    logger.info("ML matcher not available. Using standard matching only.")
 
 
 class MatchingEngine:
@@ -18,16 +29,40 @@ class MatchingEngine:
     
     def __init__(self, 
                  use_symbolic: bool = True,
-                 similarity_threshold: float = 0.8):
+                 similarity_threshold: float = 0.8,
+                 use_ml: bool = True):
         """
         Initialize matching engine.
         
         Args:
             use_symbolic: Whether to use SymPy for symbolic matching
             similarity_threshold: Minimum similarity for text matching (0-1)
+            use_ml: Whether to use ML-enhanced matching (trained on Rwanda dataset)
         """
         self.use_symbolic = use_symbolic
         self.similarity_threshold = similarity_threshold
+        self.use_ml = use_ml and ML_MATCHER_AVAILABLE
+        self.ml_matcher = None
+        
+        # Initialize ML matcher if available
+        if self.use_ml:
+            try:
+                self.ml_matcher = MLMatcher(use_embeddings=True, similarity_threshold=0.6)
+                
+                # Try to load trained model
+                model_path = Path(__file__).parent / "models" / "grading_model.pkl"
+                if model_path.exists():
+                    try:
+                        self.ml_matcher.load_model(str(model_path))
+                        logger.info("Loaded trained ML grading model")
+                    except Exception as e:
+                        logger.warning(f"Could not load ML model: {e}. Using untrained model.")
+                else:
+                    logger.info("No trained ML model found. Using untrained model.")
+            except Exception as e:
+                logger.warning(f"Could not initialize ML matcher: {e}")
+                self.use_ml = False
+                self.ml_matcher = None
         
         # Try to import SymPy for symbolic math
         if use_symbolic:
@@ -45,13 +80,15 @@ class MatchingEngine:
         else:
             self.sympy_available = False
     
-    def match(self, student_text: str, gold_text: str) -> Tuple[float, str]:
+    def match(self, student_text: str, gold_text: str, question_context: Optional[Dict] = None) -> Tuple[float, str]:
         """
         Match student text against gold text using multiple strategies.
+        Enhanced with ML-based matching trained on Rwanda exam dataset.
         
         Args:
             student_text: Student's answer
             gold_text: Correct answer
+            question_context: Optional context (difficulty, question_type, keywords, etc.)
             
         Returns:
             (match_score, strategy_used) where score is 0.0 to 1.0
@@ -66,18 +103,30 @@ class MatchingEngine:
         if score == 1.0:
             return score, strategy
         
-        # Strategy 3: Symbolic equivalence
+        # Strategy 3: ML-based semantic matching (trained on Rwanda dataset)
+        if self.use_ml and self.ml_matcher:
+            score, strategy = self.ml_matcher.match(student_text, gold_text, question_context)
+            if score > 0.75:  # High confidence ML match
+                return score, strategy
+        
+        # Strategy 4: Symbolic equivalence (for math)
         if self.sympy_available:
             score, strategy = self._symbolic_match(student_text, gold_text)
             if score > 0.9:
                 return score, strategy
         
-        # Strategy 4: Valid derivation
+        # Strategy 5: Valid derivation
         score, strategy = self._derivation_match(student_text, gold_text)
         if score > 0.7:
             return score, strategy
         
-        # Strategy 5: Text similarity
+        # Strategy 6: ML-based matching (lower threshold, fallback)
+        if self.use_ml and self.ml_matcher:
+            score, strategy = self.ml_matcher.match(student_text, gold_text, question_context)
+            if score > 0.0:
+                return score, strategy
+        
+        # Strategy 7: Text similarity (fallback)
         score, strategy = self._similarity_match(student_text, gold_text)
         
         return score, strategy
@@ -231,23 +280,34 @@ class MatchingEngine:
         
         return 0.0, ""
     
-    def find_best_match(self, student_text: str, gold_steps: list) -> Tuple[Optional[int], float, str]:
+    def find_best_match(self, student_text: str, gold_steps: list, question_context: Optional[Dict] = None) -> Tuple[Optional[int], float, str]:
         """
         Find the best matching gold step for student text.
+        Enhanced with ML-based matching.
         
         Args:
             student_text: Student's answer
             gold_steps: List of Step objects
+            question_context: Optional context about the question
             
         Returns:
             (best_index, best_score, strategy) or (None, 0.0, "") if no match
         """
+        # Try ML matcher first if available (faster for large lists)
+        if self.use_ml and self.ml_matcher:
+            ml_index, ml_score, ml_strategy = self.ml_matcher.find_best_match(
+                student_text, gold_steps, question_context
+            )
+            if ml_score > 0.7:  # High confidence ML match
+                return ml_index, ml_score, ml_strategy
+        
+        # Fallback to standard matching
         best_index = None
         best_score = 0.0
         best_strategy = ""
         
         for i, gold_step in enumerate(gold_steps):
-            score, strategy = self.match(student_text, gold_step.text)
+            score, strategy = self.match(student_text, gold_step.text, question_context)
             
             if score > best_score:
                 best_score = score

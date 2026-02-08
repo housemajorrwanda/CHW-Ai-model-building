@@ -94,85 +94,43 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
   };
 
   const insertShapeSVG = (shapeData: any) => {
-    // Insert shape node using insertContent directly
-    const result = editor.chain().focus().insertContent({
-      type: 'shape',
-      attrs: shapeData,
-    }).run();
-    
-    // Log for debugging
-    const content = editor.getJSON();
-    console.log('After shape insert, editor content:', content);
-    console.log('Shape data:', shapeData);
-    
-    const newContent = {
-      id: crypto.randomUUID(),
-      contentType: 'shape',
-      contentData: shapeData,
-    };
-    onUpdate({
-      ...question,
-      embeddedContent: [...question.embeddedContent, newContent],
-    });
+    const { type, width, height, color, strokeWidth } = shapeData;
+    const w = parseInt(width) || 100;
+    const h = parseInt(height) || 100;
+    const c = color || '#3b82f6';
+    const sw = parseInt(strokeWidth) || 2;
+
+    let svgContent = '';
+    switch (type) {
+      case 'circle':
+        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg"><circle cx="${w/2}" cy="${h/2}" r="${Math.min(w,h)/2-5}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        break;
+      case 'square':
+        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${w}" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="${w-10}" height="${w-10}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        break;
+      case 'rectangle':
+        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="${w-10}" height="${h-10}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        break;
+      case 'triangle':
+        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg"><polygon points="${w/2},5 ${w-5},${h-5} 5,${h-5}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        break;
+    }
+
+    if (svgContent) {
+      editor.chain().focus().setImage({ src: svgContent }).run();
+    }
   };
 
   const insertGraphHTML = (graphData: any) => {
-    const graphAttrs = {
-      graphType: graphData.type,
-      data: graphData.data,
-      title: graphData.title || 'Graph',
-      xLabel: graphData.xLabel || 'X Axis',
-      yLabel: graphData.yLabel || 'Y Axis',
-    };
-    
-    // Insert graph node using insertContent directly
-    const result = editor.chain().focus().insertContent({
-      type: 'graph',
-      attrs: graphAttrs,
-    }).run();
-    
-    // Log for debugging
-    const content = editor.getJSON();
-    console.log('After graph insert, editor content:', content);
-    console.log('Graph attrs:', graphAttrs);
-    
-    const newContent = {
-      id: crypto.randomUUID(),
-      contentType: 'graph',
-      contentData: graphData,
-    };
-    onUpdate({
-      ...question,
-      embeddedContent: [...question.embeddedContent, newContent],
-    });
+    // Insert as plain text description
+    const graphText = `[Graph: ${graphData.title || 'Chart'} - Type: ${graphData.type}, X: ${graphData.xLabel || 'X'}, Y: ${graphData.yLabel || 'Y'}, ${graphData.data ? graphData.data.length : 0} points]`;
+    editor.chain().focus().insertContent(graphText).run();
   };
 
   const insertFormula = (latex: string, displayMode: boolean) => {
-    // Insert formula node using insertContent directly
-    const result = editor.chain().focus().insertContent({
-      type: 'formula',
-      attrs: {
-        latex,
-        display: displayMode,
-      },
-    }).run();
-    
-    // Log for debugging
-    const content = editor.getJSON();
-    console.log('After formula insert, editor content:', content);
-    console.log('Formula latex:', latex);
-  };
-
-  const addEmbeddedContent = (contentType: string, data: any) => {
-    const newContent = {
-      id: crypto.randomUUID(),
-      contentType,
-      contentData: data,
-    };
-    onUpdate({
-      ...question,
-      embeddedContent: [...question.embeddedContent, newContent],
-    });
+    // Insert formula as LaTeX notation (students/readers will understand it)
+    const formulaText = displayMode ? `$$${latex}$$` : `$${latex}$`;
+    editor.chain().focus().insertContent(` ${formulaText} `).run();
   };
 
   const isTableSelected = editor.isActive('table');
@@ -313,7 +271,6 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
               <PeriodicTableSelector
                 onSelect={(element) => {
                   editor.chain().focus().insertContent(element.symbol).run();
-                  addEmbeddedContent('periodic_element', element);
                 }}
               />
             </TabsContent>

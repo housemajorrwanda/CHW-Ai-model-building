@@ -12,10 +12,12 @@ interface RecentSubmissionsProps {
 }
 
 export function RecentSubmissions({ submissions, showStudent = true }: RecentSubmissionsProps) {
-  const statusConfig = {
+  const statusConfig: Record<string, { label: string; icon: any; className: string }> = {
     pending: { label: 'Pending', icon: Clock, className: 'bg-warning/10 text-warning border-warning/20' },
     grading: { label: 'Grading', icon: Loader2, className: 'bg-primary/10 text-primary border-primary/20' },
     graded: { label: 'Graded', icon: CheckCircle2, className: 'bg-success/10 text-success border-success/20' },
+    awaiting_approval: { label: 'Awaiting Approval', icon: Clock, className: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
+    approved: { label: 'Approved', icon: CheckCircle2, className: 'bg-success/10 text-success border-success/20' },
   };
 
   return (
@@ -34,7 +36,7 @@ export function RecentSubmissions({ submissions, showStudent = true }: RecentSub
           <p className="text-center text-muted-foreground py-8">No submissions yet</p>
         ) : (
           submissions.map((submission) => {
-            const status = statusConfig[submission.status];
+            const status = statusConfig[submission.status] || statusConfig.pending;
             const StatusIcon = status.icon;
 
             return (
@@ -57,7 +59,7 @@ export function RecentSubmissions({ submissions, showStudent = true }: RecentSub
                 </div>
 
                 <div className="flex items-center gap-4">
-                  {submission.status === 'graded' && submission.totalScore !== undefined && (
+                  {(submission.status === 'graded' || submission.status === 'approved') && submission.totalScore !== undefined && (
                     <span className="font-mono font-semibold">
                       {submission.totalScore}/{submission.maxScore}
                     </span>

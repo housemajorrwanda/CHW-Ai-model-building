@@ -45,7 +45,7 @@ export default function TakeExam() {
       const initialAnswers = exam.questions.map((q: any, idx: number) => ({
         questionId: q.id || `q-${idx}`,
         questionNumber: q.number || idx + 1,
-        typedAnswer: '',
+        typedAnswer: '<p>Type your answer here...</p>',
         images: [],
       }));
       setAnswers(initialAnswers);
@@ -210,7 +210,10 @@ export default function TakeExam() {
 
   const currentQuestion = exam.questions?.[currentQuestionIndex];
   const currentQuestionNumber = currentQuestion?.number || currentQuestionIndex + 1;
-  const currentAnswer = answers.find(a => a.questionNumber === currentQuestionNumber);
+  const currentAnswer = answers.find(a => 
+    a.questionNumber === currentQuestionNumber || 
+    a.questionId === currentQuestion?.id
+  ) || answers.find(a => a.questionNumber === (currentQuestionIndex + 1));
   
   return (
     <div className="flex gap-6 h-[calc(100vh-120px)]">
@@ -305,11 +308,38 @@ export default function TakeExam() {
 
                     <TabsContent value="typed" className="p-6 pt-4">
                       <AnswerEditor
+                        key={`editor-${currentQuestion?.id || currentQuestionNumber}`}
                         questionNumber={currentQuestionNumber}
                         questionText={currentQuestion.richContent || currentQuestion.text}
                         questionPoints={currentQuestion.points || 0}
-                        answer={currentAnswer?.typedAnswer || ''}
-                        onUpdate={(newAnswer) => updateAnswer(currentQuestionNumber, newAnswer)}
+                        answer={currentAnswer?.typedAnswer || '<p>Type your answer here...</p>'}
+                        onUpdate={(newAnswer) => {
+                          const questionId = currentQuestion?.id;
+                          if (questionId) {
+                            setAnswers((prev) => {
+                              const existing = prev.find(a => 
+                                a.questionId === questionId || 
+                                a.questionNumber === currentQuestionNumber
+                              );
+                              if (existing) {
+                                return prev.map(a => 
+                                  (a.questionId === questionId || a.questionNumber === currentQuestionNumber)
+                                    ? { ...a, typedAnswer: newAnswer }
+                                    : a
+                                );
+                              } else {
+                                return [...prev, {
+                                  questionId: questionId,
+                                  questionNumber: currentQuestionNumber,
+                                  typedAnswer: newAnswer,
+                                  images: []
+                                }];
+                              }
+                            });
+                          } else {
+                            updateAnswer(currentQuestionNumber, newAnswer);
+                          }
+                        }}
                       />
                     </TabsContent>
 
@@ -344,7 +374,7 @@ export default function TakeExam() {
                           />
                           <label htmlFor={`file-upload-${currentQuestionNumber}`} className="cursor-pointer">
                             <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
-                            <p className="font-medium mb-1">Drop images here or click to upload</p>
+                            <p className="font-medium mb-1">Drop images or click to upload</p>
                             <p className="text-sm text-muted-foreground">
                               Supports JPG, PNG • Max 10MB per file
                             </p>

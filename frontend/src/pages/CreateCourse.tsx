@@ -187,7 +187,7 @@ export default function CreateCourse() {
               <Label htmlFor="description">Description</Label>
               <Textarea
                 id="description"
-                placeholder="Describe what students will learn in this course..."
+                placeholder="Course description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={4}
@@ -251,7 +251,7 @@ export default function CreateCourse() {
                     <div className="space-y-2">
                       <Label>Topic Description</Label>
                       <Textarea
-                        placeholder="Brief description of this topic..."
+                        placeholder="Topic description"
                         value={topic.description}
                         onChange={(e) => handleTopicChange(topicIndex, 'description', e.target.value)}
                         rows={2}

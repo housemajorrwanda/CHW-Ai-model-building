@@ -181,6 +181,29 @@ export default function ProfessorExams() {
           <Button
             variant="outline"
             size="sm"
+            onClick={async () => {
+              try {
+                const blob = await examsAPI.downloadPDF(exam.id);
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${exam.title.replace(/\s+/g, '_')}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                toast.success('PDF downloaded!');
+              } catch (error: any) {
+                toast.error('Failed to download PDF');
+              }
+            }}
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            PDF
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             className="flex-1"
             onClick={() => navigate(`/exams/${exam.id}/edit`)}
           >

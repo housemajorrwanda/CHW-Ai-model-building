@@ -135,7 +135,7 @@ export function GoldSolutionEditor({ steps, finalAnswer, finalAnswerLatex, onUpd
                   value={newStep.description}
                   onChange={(e) => setNewStep({ ...newStep, description: e.target.value })}
                   onFocus={() => setActiveField('description')}
-                  placeholder="Brief description of this step"
+                  placeholder="Step description"
                 />
               </div>
               <div>

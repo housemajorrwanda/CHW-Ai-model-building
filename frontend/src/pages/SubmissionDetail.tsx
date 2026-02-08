@@ -127,7 +127,14 @@ export default function SubmissionDetail() {
                     {/* Student's Answer */}
                     <div className="p-4 rounded-lg bg-muted/50">
                       <p className="text-sm font-medium text-muted-foreground mb-2">Student's Answer</p>
-                      <p className="font-mono">{answer.extractedLatex || answer.extractedText || 'No answer extracted'}</p>
+                      {answer.extractedText ? (
+                        <div 
+                          className="prose prose-sm max-w-none"
+                          dangerouslySetInnerHTML={{ __html: answer.extractedText }}
+                        />
+                      ) : (
+                        <p className="font-mono text-muted-foreground">{answer.extractedLatex || 'No answer provided'}</p>
+                      )}
                     </div>
 
                     {/* Step-by-Step Results */}

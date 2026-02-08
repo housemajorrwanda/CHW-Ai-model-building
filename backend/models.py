@@ -23,6 +23,8 @@ class SubmissionStatus(str, enum.Enum):
     PENDING = "pending"
     GRADING = "grading"
     GRADED = "graded"
+    AWAITING_APPROVAL = "awaiting_approval"
+    APPROVED = "approved"
 
 
 class CourseLevel(str, enum.Enum):
@@ -51,7 +53,7 @@ class User(Base):
     
     # Relationships
     courses_taught = relationship("Course", back_populates="professor", foreign_keys="Course.professor_id")
-    submissions = relationship("Submission", back_populates="student")
+    submissions = relationship("Submission", back_populates="student", foreign_keys="Submission.student_id")
 
 
 class Course(Base):
@@ -145,10 +147,13 @@ class Submission(Base):
     typed_answers = Column(Text, nullable=True)  # JSON data with typed answers
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())
     graded_at = Column(DateTime(timezone=True), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    approved_by = Column(String, ForeignKey("users.id"), nullable=True)
     
     # Relationships
     exam = relationship("Exam", back_populates="submissions")
-    student = relationship("User", back_populates="submissions")
+    student = relationship("User", back_populates="submissions", foreign_keys=[student_id])
+    approver = relationship("User", foreign_keys=[approved_by])
     images = relationship("SubmissionImage", back_populates="submission", cascade="all, delete-orphan")
     grading_results = relationship("GradingResult", back_populates="submission", cascade="all, delete-orphan")
 
@@ -290,5 +295,5 @@ class CourseEnrollment(Base):
     
     # Relationships
     course = relationship("Course", back_populates="enrollments")
-    student = relationship("User")
+    student = relationship("User", foreign_keys=[student_id])
 

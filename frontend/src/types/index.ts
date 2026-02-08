@@ -58,7 +58,7 @@ export interface Submission {
   studentId: string;
   studentName: string;
   submittedAt: Date;
-  status: 'pending' | 'grading' | 'graded';
+  status: 'pending' | 'grading' | 'graded' | 'awaiting_approval' | 'approved';
   imageUrl?: string;
   answers: SubmittedAnswer[];
   totalScore?: number;

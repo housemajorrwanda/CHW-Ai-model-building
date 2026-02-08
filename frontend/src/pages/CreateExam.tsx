@@ -263,7 +263,7 @@ export default function CreateExam() {
                 id="description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief description of exam content..."
+                placeholder="Exam description"
                 rows={2}
               />
             </div>

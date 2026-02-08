@@ -36,21 +36,30 @@ echo ""
 echo "🚀 Starting Backend (FastAPI)..."
 cd backend
 
-# Check if venv exists, if not suggest creating one
-if [ ! -d "venv" ]; then
-    echo "⚠️  No virtual environment found. Creating one..."
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install -r requirements.txt
+# Check if port 8000 is already in use
+if lsof -Pi :8000 -sTCP:LISTEN -t >/dev/null 2>&1 ; then
+    echo "⚠️  Port 8000 is already in use. Backend may already be running."
+    echo "   To stop existing instance, run: ./stop.sh"
+    BACKEND_PID=$(lsof -ti :8000)
+    echo "   Using existing backend (PID: $BACKEND_PID)"
 else
-    source venv/bin/activate
-fi
+    # Check if venv exists, if not suggest creating one
+    if [ ! -d "venv" ]; then
+        echo "⚠️  No virtual environment found. Creating one..."
+        python3 -m venv venv
+        source venv/bin/activate
+        pip install -r requirements.txt
+    else
+        source venv/bin/activate
+    fi
 
-# Start backend in background
-nohup python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000 > ../backend.log 2>&1 &
-BACKEND_PID=$!
-echo "✅ Backend started on http://localhost:8000 (PID: $BACKEND_PID)"
-echo "   Logs: backend.log"
+    # Start backend in background
+    # Use the venv's python explicitly
+    nohup venv/bin/python -m uvicorn api:app --reload --host 0.0.0.0 --port 8000 > ../backend.log 2>&1 &
+    BACKEND_PID=$!
+    echo "✅ Backend started on http://localhost:8000 (PID: $BACKEND_PID)"
+    echo "   Logs: backend.log"
+fi
 echo ""
 
 # Go back to root
@@ -60,17 +69,25 @@ cd ..
 echo "🚀 Starting Frontend (React + Vite)..."
 cd frontend
 
-# Check if node_modules exists
-if [ ! -d "node_modules" ]; then
-    echo "⚠️  Installing frontend dependencies..."
-    npm install
-fi
+# Check if port 8080 is already in use
+if lsof -Pi :8080 -sTCP:LISTEN -t >/dev/null 2>&1 ; then
+    echo "⚠️  Port 8080 is already in use. Frontend may already be running."
+    echo "   To stop existing instance, run: ./stop.sh"
+    FRONTEND_PID=$(lsof -ti :8080)
+    echo "   Using existing frontend (PID: $FRONTEND_PID)"
+else
+    # Check if node_modules exists
+    if [ ! -d "node_modules" ]; then
+        echo "⚠️  Installing frontend dependencies..."
+        npm install
+    fi
 
-# Start frontend in background
-nohup npm run dev > ../frontend.log 2>&1 &
-FRONTEND_PID=$!
-echo "✅ Frontend started on http://localhost:8080 (PID: $FRONTEND_PID)"
-echo "   Logs: frontend.log"
+    # Start frontend in background
+    nohup npm run dev > ../frontend.log 2>&1 &
+    FRONTEND_PID=$!
+    echo "✅ Frontend started on http://localhost:8080 (PID: $FRONTEND_PID)"
+    echo "   Logs: frontend.log"
+fi
 echo ""
 
 # Go back to root

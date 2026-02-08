@@ -160,11 +160,6 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
           <div ref={editorRef} className="border rounded-lg p-4 min-h-[200px] prose max-w-none focus-within:ring-2 focus-within:ring-primary/20">
             <EditorContent editor={editor} />
           </div>
-          
-          {/* Editor Instructions */}
-          <p className="text-xs text-muted-foreground mt-2">
-            Tip: Click on a table to see table controls. Click on an image to see image controls.
-          </p>
         </CardContent>
       </Card>
 

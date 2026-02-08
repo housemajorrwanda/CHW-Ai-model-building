@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, AlertCircle, Filter } from 'lucide-react';
+import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, AlertCircle, Filter, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
@@ -88,6 +88,26 @@ export default function ProfessorSubmissions() {
     }
   };
 
+  const handleApprove = async (submissionId: string) => {
+    try {
+      await submissionsAPI.approve(submissionId);
+      toast.success('Submission approved!');
+      await loadData();
+    } catch (error: any) {
+      toast.error('Failed to approve: ' + error.message);
+    }
+  };
+
+  const handleReject = async (submissionId: string) => {
+    try {
+      await submissionsAPI.reject(submissionId);
+      toast.success('Submission rejected. Student can resubmit.');
+      await loadData();
+    } catch (error: any) {
+      toast.error('Failed to reject: ' + error.message);
+    }
+  };
+
   const filteredSubmissions = submissions.filter(sub => {
     if (selectedExam !== 'all' && sub.examId !== selectedExam) return false;
     if (selectedStatus !== 'all' && sub.status !== selectedStatus) return false;
@@ -96,8 +116,11 @@ export default function ProfessorSubmissions() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'graded':
+      case 'approved':
         return 'default';
+      case 'graded':
+      case 'awaiting_approval':
+        return 'secondary';
       case 'grading':
         return 'secondary';
       case 'pending':
@@ -109,8 +132,11 @@ export default function ProfessorSubmissions() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
+      case 'approved':
       case 'graded':
         return <CheckCircle className="h-4 w-4 text-green-600" />;
+      case 'awaiting_approval':
+        return <Clock className="h-4 w-4 text-orange-600" />;
       case 'grading':
         return <Loader2 className="h-4 w-4 animate-spin text-yellow-600" />;
       case 'pending':
@@ -313,6 +339,26 @@ export default function ProfessorSubmissions() {
                               <Eye className="h-4 w-4 mr-2" />
                               View
                             </Button>
+                            {submission.status === 'awaiting_approval' && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApprove(submission.id)}
+                                  className="bg-green-600 hover:bg-green-700"
+                                >
+                                  <CheckCircle className="h-4 w-4 mr-2" />
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleReject(submission.id)}
+                                >
+                                  <X className="h-4 w-4 mr-2" />
+                                  Reject
+                                </Button>
+                              </>
+                            )}
                             {submission.status === 'pending' && (
                               <Button
                                 size="sm"

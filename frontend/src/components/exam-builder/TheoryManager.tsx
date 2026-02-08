@@ -125,7 +125,7 @@ export function TheoryManager({ theories, onUpdate }: TheoryManagerProps) {
               <Textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief explanation of the theory or constant"
+                placeholder="Explanation"
                 className="h-16"
               />
             </div>

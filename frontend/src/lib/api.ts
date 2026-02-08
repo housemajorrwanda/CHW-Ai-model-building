@@ -186,6 +186,17 @@ export const examsAPI = {
       method: 'POST',
     });
   },
+
+  async downloadPDF(examId: string) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/exams/${examId}/download`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+    if (!response.ok) throw new Error('Failed to download PDF');
+    return response.blob();
+  },
 };
 
 // ============================================================================
@@ -229,6 +240,18 @@ export const submissionsAPI = {
 
   async grade(submissionId: string) {
     return apiCall(`/submissions/${submissionId}/grade`, {
+      method: 'POST',
+    });
+  },
+
+  async approve(submissionId: string) {
+    return apiCall(`/submissions/${submissionId}/approve`, {
+      method: 'POST',
+    });
+  },
+
+  async reject(submissionId: string) {
+    return apiCall(`/submissions/${submissionId}/reject`, {
       method: 'POST',
     });
   },

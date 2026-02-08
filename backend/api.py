@@ -4,9 +4,9 @@ FastAPI backend for EasyGrade
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import os
 from pathlib import Path
 import shutil
@@ -282,17 +282,20 @@ def get_courses(
     db: Session = Depends(get_db)
 ):
     """Get all courses for current user"""
+    query = db.query(models.Course).options(
+        joinedload(models.Course.professor),
+        selectinload(models.Course.exams).selectinload(models.Exam.submissions)
+    )
+    
     if current_user.role == models.UserRole.PROFESSOR:
         # Professors see only their courses
-        courses = db.query(models.Course).filter(
-            models.Course.professor_id == current_user.id
-        ).all()
+        courses = query.filter(models.Course.professor_id == current_user.id).all()
     elif current_user.role == models.UserRole.ADMIN:
         # Admins see all courses
-        courses = db.query(models.Course).all()
+        courses = query.all()
     else:
         # Students see all available courses
-        courses = db.query(models.Course).all()
+        courses = query.all()
     
     return [course_to_response(course, db) for course in courses]
 
@@ -555,9 +558,15 @@ def get_exams(
             models.CourseEnrollment.status == models.EnrollmentStatus.APPROVED
         ).all()
         enrolled_course_ids = [c[0] for c in enrolled_course_ids]
-        query = query.filter(models.Exam.course_id.in_(enrolled_course_ids))
+        if enrolled_course_ids:
+            query = query.filter(models.Exam.course_id.in_(enrolled_course_ids))
+        else:
+            # No enrolled courses, return empty result
+            query = query.filter(models.Exam.id == None)
     
-    exams = query.all()
+    exams = query.options(
+        selectinload(models.Exam.questions).selectinload(models.Question.gold_steps)
+    ).all()
     
     result = []
     for exam in exams:
@@ -584,7 +593,18 @@ def get_exams(
                         steps=gold_steps,
                         finalAnswer=question.final_answer or "",
                         finalAnswerLatex=question.final_answer_latex or ""
-                    )
+                    ),
+                    goldSolutionSteps=gold_steps,
+                    finalAnswer=question.final_answer or "",
+                    finalAnswerLatex=question.final_answer_latex or "",
+                    questionType=getattr(question, 'question_type', 'standard'),
+                    richContent=question.rich_content,
+                    outlineLevel=getattr(question, 'outline_level', 1),
+                    parentQuestionId=getattr(question, 'parent_question_id', None),
+                    subQuestions=[],
+                    attachments=[],
+                    embeddedContent=[],
+                    theories=[]
                 )
             )
         
@@ -698,7 +718,18 @@ def get_exam(
                     steps=gold_steps,
                     finalAnswer=question.final_answer or "",
                     finalAnswerLatex=question.final_answer_latex or ""
-                )
+                ),
+                goldSolutionSteps=gold_steps,  # Add flattened version for frontend
+                finalAnswer=question.final_answer or "",
+                finalAnswerLatex=question.final_answer_latex or "",
+                questionType=getattr(question, 'question_type', 'standard'),
+                richContent=question.rich_content,
+                outlineLevel=getattr(question, 'outline_level', 1),
+                parentQuestionId=getattr(question, 'parent_question_id', None),
+                subQuestions=[],
+                attachments=[],
+                embeddedContent=[],
+                theories=[]
             )
         )
     
@@ -833,6 +864,363 @@ def unpublish_exam(
 # Submission Endpoints (Next part will continue...)
 # ============================================================================
 
+
+
+def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
+    """
+    Extract mathematical content from HTML.
+    Returns (text_content, latex_content)
+    """
+    from html import unescape
+    import re
+    
+    if not html_content or not html_content.strip():
+        return '', None
+    
+    # Extract LaTeX from math nodes (if present)
+    latex_content = None
+    latex_patterns = [
+        r'<span[^>]*data-type="math"[^>]*>(.*?)</span>',
+        r'<span[^>]*class="[^"]*math[^"]*"[^>]*>(.*?)</span>',
+        r'\$\$(.*?)\$\$',
+        r'\$(.*?)\$',
+        r'\\\[(.*?)\\\]',
+        r'\\\((.*?)\\\)',
+    ]
+    
+    all_latex = []
+    for pattern in latex_patterns:
+        matches = re.findall(pattern, html_content, re.DOTALL)
+        if matches:
+            all_latex.extend(matches)
+    
+    if all_latex:
+        # Join all LaTeX expressions, separated by spaces
+        latex_content = ' '.join([m.strip() for m in all_latex if m.strip()])
+    
+    # Extract plain text content (strip HTML tags)
+    text_content = re.sub(r'<[^>]+>', '', html_content)
+    text_content = unescape(text_content).strip()
+    
+    # Remove placeholder text
+    if text_content.lower() in ['type your answer here...', '']:
+        text_content = ''
+    
+    # If we have LaTeX but no text, use LaTeX as text (it will be parsed)
+    if not text_content and latex_content:
+        text_content = latex_content
+    
+    return text_content, latex_content
+
+
+def parse_answer_into_steps(answer_text: str) -> List[str]:
+    """
+    Parse a student's answer into individual steps.
+    Tries to split by common step indicators (newlines, = signs, numbers, etc.)
+    """
+    if not answer_text or not answer_text.strip():
+        return []
+    
+    # Split by newlines first
+    lines = [line.strip() for line in answer_text.split('\n') if line.strip()]
+    
+    if len(lines) <= 1:
+        # Single line answer - try to split by = signs (common in math)
+        single_line = answer_text.strip()
+        
+        # Check if it contains multiple = signs (likely multiple steps)
+        if '=' in single_line:
+            # Split by = but keep the = with the right side
+            # Pattern: look for = that's not part of <=, >=, !=, ==
+            parts = re.split(r'(?<![<>=!])=(?!=)', single_line)
+            if len(parts) > 1:
+                steps = []
+                # First part is the initial expression
+                if parts[0].strip():
+                    steps.append(parts[0].strip())
+                # Remaining parts are steps starting with =
+                for i in range(1, len(parts)):
+                    step = '=' + parts[i].strip()
+                    if step.strip() != '=':  # Don't add empty steps
+                        steps.append(step)
+                if steps:
+                    return steps
+        
+        # If no = signs or splitting didn't work, return as single step
+        return [single_line] if single_line else []
+    
+    # Multiple lines - try to identify steps
+    steps = []
+    current_step = []
+    
+    for line in lines:
+        # Check if line looks like a new step
+        if re.match(r'^(step\s*\d+|step|solution|answer|\(?\d+[\.\)])\s*:?\s*', line, re.IGNORECASE):
+            if current_step:
+                steps.append(' '.join(current_step))
+            current_step = [line]
+        # Check if line starts with = (new step in math)
+        elif line.startswith('='):
+            if current_step:
+                steps.append(' '.join(current_step))
+            current_step = [line]
+        else:
+            current_step.append(line)
+    
+    # Add last step
+    if current_step:
+        steps.append(' '.join(current_step))
+    
+    # If no clear steps found, split by double newlines or return as single step
+    if not steps:
+        # Try splitting by double newlines
+        double_newline_split = [s.strip() for s in answer_text.split('\n\n') if s.strip()]
+        if len(double_newline_split) > 1:
+            steps = double_newline_split
+        else:
+            steps = [answer_text.strip()]
+    
+    return steps
+
+
+async def grade_submission_automatically(submission_id: str, db: Session):
+    """Automatically grade a submission after it's submitted"""
+    import json
+    import re
+    from html import unescape
+    
+    submission = db.query(models.Submission).filter(
+        models.Submission.id == submission_id
+    ).first()
+    if not submission:
+        return
+    
+    submission.status = models.SubmissionStatus.GRADING
+    db.commit()
+    
+    exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
+    questions = exam.questions
+    
+    total_score = 0.0
+    
+    has_typed_answers = submission.typed_answers is not None and submission.typed_answers.strip()
+    has_images = len(submission.images) > 0
+    
+    if not has_typed_answers and not has_images:
+        submission.status = models.SubmissionStatus.PENDING
+        db.commit()
+        return
+    
+    # Process typed answers with proper mathematical evaluation
+    if has_typed_answers:
+        try:
+            typed_answers_data = json.loads(submission.typed_answers)
+            
+            for answer_data in typed_answers_data:
+                question_id = answer_data.get('questionId')
+                question_number = answer_data.get('questionNumber')
+                typed_answer = answer_data.get('typedAnswer', '')
+                
+                if not typed_answer or typed_answer.strip() == '':
+                    continue
+                
+                # Find the corresponding question
+                question = next(
+                    (q for q in questions if q.id == question_id or (question_number and q.number == question_number)), 
+                    None
+                )
+                if not question:
+                    continue
+                
+                # Extract math content from HTML
+                text_content, latex_content = extract_math_from_html(typed_answer)
+                
+                if not text_content and not latex_content:
+                    continue
+                
+                # Use LaTeX if available, otherwise use text
+                answer_to_grade = latex_content if latex_content else text_content
+                
+                # Parse answer into steps
+                student_steps = parse_answer_into_steps(answer_to_grade)
+                
+                if not student_steps:
+                    continue
+                
+                # Get gold solution steps
+                gold_steps = []
+                for step in question.gold_steps:
+                    # Prefer latex if available, otherwise use expression
+                    content = step.latex if step.latex and step.latex.strip() else (step.expression if step.expression else '')
+                    if content.strip():  # Only add non-empty steps
+                        gold_steps.append(GraderStep(
+                            content=content.strip(),
+                            points=float(step.points),
+                            required=step.required
+                        ))
+                
+                if not gold_steps:
+                    # No gold steps defined, skip grading
+                    print(f"Warning: Question {question.id} has no valid gold steps")
+                    continue
+                
+                # Debug logging
+                print(f"Grading question {question.id}:")
+                print(f"  Gold steps ({len(gold_steps)}): {[gs.content for gs in gold_steps]}")
+                print(f"  Student steps ({len(student_steps)}): {student_steps}")
+                
+                # Use MathGrader to evaluate
+                grader = MathGrader(gold_steps)
+                grading_result = grader.grade(student_steps)
+                
+                print(f"  Grading result: {grading_result['total_score']}/{grading_result['max_score']} ({grading_result['percentage']:.1f}%)")
+                # Print evaluation details
+                for idx, eval_obj in enumerate(grading_result['evaluations']):
+                    print(f"    Step {idx+1}: {eval_obj.status.value}, {eval_obj.points_earned} pts - {eval_obj.feedback}")
+                
+                # Store grading result
+                db_grading_result = models.GradingResult(
+                    submission_id=submission.id,
+                    question_id=question.id,
+                    extracted_text=text_content,
+                    extracted_latex=latex_content,
+                    score=grading_result['total_score'],
+                    max_score=grading_result['max_score'],
+                    feedback=f"Auto-graded: {grading_result['percentage']:.1f}%",
+                    is_correct=grading_result['percentage'] >= 70
+                )
+                db.add(db_grading_result)
+                db.flush()
+                
+                # Store step results
+                for idx, (student_step, evaluation) in enumerate(
+                    zip(student_steps, grading_result['evaluations']), start=1
+                ):
+                    matched_gold = None
+                    if evaluation.matched_gold_step is not None:
+                        matched_gold_step_obj = gold_steps[evaluation.matched_gold_step]
+                        matched_gold = matched_gold_step_obj.content
+                    
+                    step_result = models.StepResult(
+                        grading_result_id=db_grading_result.id,
+                        step_number=idx,
+                        student_text=student_step,
+                        is_correct=evaluation.status.value == "Correct",
+                        score=evaluation.points_earned,
+                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
+                        feedback=evaluation.feedback,
+                        expected=matched_gold,
+                        received=student_step
+                    )
+                    db.add(step_result)
+                
+                total_score += grading_result['total_score']
+                
+        except Exception as e:
+            print(f"Error grading typed answers: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Process images with OCR and MathGrader
+    if has_images:
+        for image_record in submission.images:
+            try:
+                image_path = Path(image_record.image_path)
+                if not image_path.exists():
+                    continue
+                
+                # Run OCR to extract steps
+                with open(image_path, "rb") as f:
+                    image_bytes = f.read()
+                
+                ocr_result = ocr_processor.extract_steps_from_file(
+                    image_bytes,
+                    image_path.name
+                )
+                
+                student_steps = ocr_result.steps
+                
+                if not student_steps:
+                    continue
+                
+                # Determine which question this image corresponds to
+                # Assuming one question per image based on page number
+                question = None
+                if image_record.page_number <= len(questions):
+                    question = questions[image_record.page_number - 1]
+                else:
+                    # Try to find question by matching content or use first question
+                    question = questions[0] if questions else None
+                
+                if not question:
+                    continue
+                
+                # Get gold solution steps
+                gold_steps = [
+                    GraderStep(
+                        content=step.expression or step.latex or '',
+                        points=float(step.points),
+                        required=step.required
+                    )
+                    for step in question.gold_steps
+                ]
+                
+                if not gold_steps:
+                    continue
+                
+                # Use MathGrader to evaluate
+                grader = MathGrader(gold_steps)
+                grading_result = grader.grade(student_steps)
+                
+                # Store grading result
+                db_grading_result = models.GradingResult(
+                    submission_id=submission.id,
+                    question_id=question.id,
+                    extracted_text="\n".join(student_steps),
+                    extracted_latex=None,
+                    score=grading_result['total_score'],
+                    max_score=grading_result['max_score'],
+                    feedback=f"Auto-graded (OCR): {grading_result['percentage']:.1f}%",
+                    is_correct=grading_result['percentage'] >= 70
+                )
+                db.add(db_grading_result)
+                db.flush()
+                
+                # Store step results
+                for idx, (student_step, evaluation) in enumerate(
+                    zip(student_steps, grading_result['evaluations']), start=1
+                ):
+                    matched_gold = None
+                    if evaluation.matched_gold_step is not None:
+                        matched_gold_step_obj = gold_steps[evaluation.matched_gold_step]
+                        matched_gold = matched_gold_step_obj.content
+                    
+                    step_result = models.StepResult(
+                        grading_result_id=db_grading_result.id,
+                        step_number=idx,
+                        student_text=student_step,
+                        is_correct=evaluation.status.value == "Correct",
+                        score=evaluation.points_earned,
+                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
+                        feedback=evaluation.feedback,
+                        expected=matched_gold,
+                        received=student_step
+                    )
+                    db.add(step_result)
+                
+                total_score += grading_result['total_score']
+                
+            except Exception as e:
+                print(f"Error grading image: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    submission.total_score = total_score
+    submission.graded_at = datetime.utcnow()
+    submission.status = models.SubmissionStatus.AWAITING_APPROVAL
+    db.commit()
+
+
 @app.post("/api/submissions")
 async def submit_exam(
     exam_id: str = Form(...),
@@ -886,10 +1274,17 @@ async def submit_exam(
     db.commit()
     db.refresh(new_submission)
     
+    # Automatically trigger AI grading
+    try:
+        await grade_submission_automatically(new_submission.id, db)
+    except Exception as e:
+        print(f"Auto-grading failed: {e}")
+        # Don't fail the submission if auto-grading fails
+    
     return {
         "id": new_submission.id,
         "status": "success",
-        "message": "Submission created successfully. Processing will begin shortly."
+        "message": "Submission created successfully. AI grading in progress."
     }
 
 
@@ -905,7 +1300,15 @@ def get_submissions(
     
     # Filter based on user role
     if current_user.role == models.UserRole.STUDENT:
+        # Students only see their own submissions
         query = query.filter(models.Submission.student_id == current_user.id)
+    elif current_user.role == models.UserRole.PROFESSOR:
+        # Professors see submissions from exams in their courses
+        # Join with Exam and Course to filter by professor_id
+        query = query.join(models.Exam).join(models.Course).filter(
+            models.Course.professor_id == current_user.id
+        )
+    # Admins see all submissions (no filter)
     
     if exam_id:
         query = query.filter(models.Submission.exam_id == exam_id)
@@ -916,13 +1319,23 @@ def get_submissions(
     submissions = query.order_by(models.Submission.submitted_at.desc()).all()
     
     result = []
+    import json
+    
     for submission in submissions:
         # Get student info
         student = db.query(models.User).filter(models.User.id == submission.student_id).first()
         
+        # Get exam to access questions
+        exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
+        questions_by_id = {q.id: q for q in exam.questions} if exam else {}
+        
         # Build answers
         answers = []
+        graded_question_ids = set()
+        
+        # First, add answers from grading results (if any)
         for grading_result in submission.grading_results:
+            graded_question_ids.add(grading_result.question_id)
             step_results = [
                 schemas.StepResultResponse(
                     stepNumber=step.step_number,
@@ -936,9 +1349,7 @@ def get_submissions(
                 for step in grading_result.step_results
             ]
             
-            question = db.query(models.Question).filter(
-                models.Question.id == grading_result.question_id
-            ).first()
+            question = questions_by_id.get(grading_result.question_id)
             
             answers.append(
                 schemas.SubmittedAnswerResponse(
@@ -953,9 +1364,47 @@ def get_submissions(
                         feedback=grading_result.feedback or "",
                         stepResults=step_results,
                         isCorrect=grading_result.is_correct
-                    ) if submission.status == models.SubmissionStatus.GRADED else None
+                    ) if submission.status in [models.SubmissionStatus.GRADED, models.SubmissionStatus.APPROVED, models.SubmissionStatus.AWAITING_APPROVAL] else None
                 )
             )
+        
+        # Also include typed answers from submission (for pending/grading submissions)
+        if submission.typed_answers:
+            try:
+                typed_answers_data = json.loads(submission.typed_answers)
+                for answer_data in typed_answers_data:
+                    question_id = answer_data.get('questionId')
+                    question_number = answer_data.get('questionNumber')
+                    typed_answer = answer_data.get('typedAnswer', '')
+                    
+                    # Skip if already added from grading results
+                    if question_id in graded_question_ids:
+                        continue
+                    
+                    question = questions_by_id.get(question_id)
+                    if not question and question_number:
+                        # Try to find by number
+                        question = next((q for q in questions_by_id.values() if q.number == question_number), None)
+                    
+                    if question:
+                        # Extract text from HTML
+                        from html import unescape
+                        import re
+                        text_content = re.sub(r'<[^>]+>', '', typed_answer)
+                        text_content = unescape(text_content).strip()
+                        
+                        answers.append(
+                            schemas.SubmittedAnswerResponse(
+                                questionId=question_id or question.id,
+                                questionNumber=question_number or question.number,
+                                extractedText=text_content,
+                                extractedLatex=None,
+                                extractedSteps=[],
+                                gradingResult=None
+                            )
+                        )
+            except:
+                pass
         
         result.append(
             schemas.SubmissionResponse(
@@ -997,7 +1446,16 @@ def get_submission(
     
     # Build answers
     answers = []
+    import json
+    
+    # Get exam to access questions
+    exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
+    questions_by_id = {q.id: q for q in exam.questions} if exam else {}
+    
+    # First, add answers from grading results (if any)
+    graded_question_ids = set()
     for grading_result in submission.grading_results:
+        graded_question_ids.add(grading_result.question_id)
         step_results = [
             schemas.StepResultResponse(
                 stepNumber=step.step_number,
@@ -1011,9 +1469,7 @@ def get_submission(
             for step in grading_result.step_results
         ]
         
-        question = db.query(models.Question).filter(
-            models.Question.id == grading_result.question_id
-        ).first()
+        question = questions_by_id.get(grading_result.question_id)
         
         answers.append(
             schemas.SubmittedAnswerResponse(
@@ -1028,9 +1484,47 @@ def get_submission(
                     feedback=grading_result.feedback or "",
                     stepResults=step_results,
                     isCorrect=grading_result.is_correct
-                ) if submission.status == models.SubmissionStatus.GRADED else None
+                ) if submission.status in [models.SubmissionStatus.GRADED, models.SubmissionStatus.APPROVED, models.SubmissionStatus.AWAITING_APPROVAL] else None
             )
         )
+    
+    # Also include typed answers from submission (for pending/grading submissions)
+    if submission.typed_answers:
+        try:
+            typed_answers_data = json.loads(submission.typed_answers)
+            for answer_data in typed_answers_data:
+                question_id = answer_data.get('questionId')
+                question_number = answer_data.get('questionNumber')
+                typed_answer = answer_data.get('typedAnswer', '')
+                
+                # Skip if already added from grading results
+                if question_id in graded_question_ids:
+                    continue
+                
+                question = questions_by_id.get(question_id)
+                if not question and question_number:
+                    # Try to find by number
+                    question = next((q for q in questions_by_id.values() if q.number == question_number), None)
+                
+                if question:
+                    # Extract text from HTML
+                    from html import unescape
+                    import re
+                    text_content = re.sub(r'<[^>]+>', '', typed_answer)
+                    text_content = unescape(text_content).strip()
+                    
+                    answers.append(
+                        schemas.SubmittedAnswerResponse(
+                            questionId=question_id or question.id,
+                            questionNumber=question_number or question.number,
+                            extractedText=text_content,
+                            extractedLatex=None,
+                            extractedSteps=[],
+                            gradingResult=None
+                        )
+                    )
+        except:
+            pass
     
     return schemas.SubmissionResponse(
         id=submission.id,
@@ -1092,55 +1586,88 @@ async def grade_submission(
                 typed_answer = answer_data.get('typedAnswer', '')
                 
                 # Find the corresponding question
-                question = next((q for q in questions if q.id == question_id or q.number == question_number), None)
+                question = next(
+                    (q for q in questions if q.id == question_id or (question_number and q.number == question_number)), 
+                    None
+                )
                 
                 if not question:
                     continue
                 
-                # For typed answers, we'll do a simpler grading for now
-                # Extract text content from HTML
-                from html import unescape
-                import re
-                text_content = re.sub(r'<[^>]+>', '', typed_answer)
-                text_content = unescape(text_content).strip()
+                # Extract math content from HTML
+                text_content, latex_content = extract_math_from_html(typed_answer)
+                
+                if not text_content and not latex_content:
+                    continue
+                
+                # Use LaTeX if available, otherwise use text
+                answer_to_grade = latex_content if latex_content else text_content
+                
+                # Parse answer into steps
+                student_steps = parse_answer_into_steps(answer_to_grade)
+                
+                if not student_steps:
+                    continue
                 
                 # Get gold solution steps
                 gold_steps = [
                     GraderStep(
-                        content=step.expression,
+                        content=step.expression or step.latex or '',
                         points=float(step.points),
                         required=step.required
                     )
                     for step in question.gold_steps
                 ]
                 
-                score = 0.0
-                feedback = ""
+                if not gold_steps:
+                    continue
                 
-                if text_content and text_content.lower() not in ['type your answer here...', '']:
-                    # Give 50% credit for attempting the question with typed answer
-                    max_points = sum(step.points for step in question.gold_steps)
-                    score = max_points * 0.5
-                    feedback = ""  # No feedback message
-                else:
-                    feedback = ""
+                # Use MathGrader to evaluate
+                grader = MathGrader(gold_steps)
+                grading_result = grader.grade(student_steps)
                 
                 # Store grading result
                 db_grading_result = models.GradingResult(
                     submission_id=submission.id,
                     question_id=question.id,
                     extracted_text=text_content,
-                    extracted_latex=None,
-                    score=score,
-                    max_score=sum(step.points for step in question.gold_steps),
-                    feedback=feedback,
-                    is_correct=score > 0
+                    extracted_latex=latex_content,
+                    score=grading_result['total_score'],
+                    max_score=grading_result['max_score'],
+                    feedback=f"Graded: {grading_result['percentage']:.1f}%",
+                    is_correct=grading_result['percentage'] >= 70
                 )
                 db.add(db_grading_result)
-                total_score += score
+                db.flush()
                 
-        except json.JSONDecodeError:
-            pass  # Fall back to image processing if JSON is invalid
+                # Store step results
+                for idx, (student_step, evaluation) in enumerate(
+                    zip(student_steps, grading_result['evaluations']), start=1
+                ):
+                    matched_gold = None
+                    if evaluation.matched_gold_step is not None:
+                        matched_gold_step_obj = gold_steps[evaluation.matched_gold_step]
+                        matched_gold = matched_gold_step_obj.content
+                    
+                    step_result = models.StepResult(
+                        grading_result_id=db_grading_result.id,
+                        step_number=idx,
+                        student_text=student_step,
+                        is_correct=evaluation.status.value == "Correct",
+                        score=evaluation.points_earned,
+                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
+                        feedback=evaluation.feedback,
+                        expected=matched_gold,
+                        received=student_step
+                    )
+                    db.add(step_result)
+                
+                total_score += grading_result['total_score']
+                
+        except Exception as e:
+            print(f"Error grading typed answers: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Process images with OCR if available
     if has_images:
@@ -1227,6 +1754,69 @@ async def grade_submission(
         "maxScore": exam.total_points
     }
 
+
+@app.post("/api/submissions/{submission_id}/approve")
+async def approve_submission(
+    submission_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Approve a graded submission"""
+    if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only professors can approve submissions")
+    
+    submission = db.query(models.Submission).filter(
+        models.Submission.id == submission_id
+    ).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    if submission.status != models.SubmissionStatus.AWAITING_APPROVAL:
+        raise HTTPException(status_code=400, detail="Submission is not awaiting approval")
+    
+    submission.status = models.SubmissionStatus.APPROVED
+    submission.approved_at = datetime.utcnow()
+    submission.approved_by = current_user.id
+    db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Submission approved successfully"
+    }
+
+
+@app.post("/api/submissions/{submission_id}/reject")
+async def reject_submission(
+    submission_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Reject a graded submission and allow resubmission"""
+    if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only professors can reject submissions")
+    
+    submission = db.query(models.Submission).filter(
+        models.Submission.id == submission_id
+    ).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    if submission.status != models.SubmissionStatus.AWAITING_APPROVAL:
+        raise HTTPException(status_code=400, detail="Submission is not awaiting approval")
+    
+    submission.status = models.SubmissionStatus.PENDING
+    submission.total_score = None
+    submission.graded_at = None
+    
+    for grading_result in submission.grading_results:
+        db.delete(grading_result)
+    
+    db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Submission rejected. Student can resubmit."
+    }
 
 
 @app.get("/api/dashboard/stats", response_model=schemas.DashboardStatsResponse)
@@ -1344,6 +1934,86 @@ def root():
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+@app.get("/api/exams/{exam_id}/download")
+async def download_exam_pdf(
+    exam_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Download exam as PDF"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from io import BytesIO
+    
+    if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only professors can download exams")
+    
+    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    course = db.query(models.Course).filter(models.Course.id == exam.course_id).first()
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72,
+                           topMargin=72, bottomMargin=18)
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor='black',
+        spaceAfter=30,
+        alignment=TA_CENTER
+    )
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=14,
+        textColor='black',
+        spaceAfter=12,
+    )
+    normal_style = styles["Normal"]
+    
+    story = []
+    
+    story.append(Paragraph(exam.title, title_style))
+    story.append(Spacer(1, 0.2*inch))
+    
+    if course:
+        story.append(Paragraph(f"<b>Course:</b> {course.name}", normal_style))
+    if exam.description:
+        story.append(Paragraph(f"<b>Description:</b> {exam.description}", normal_style))
+    story.append(Paragraph(f"<b>Duration:</b> {exam.duration} minutes", normal_style))
+    story.append(Paragraph(f"<b>Total Points:</b> {exam.total_points}", normal_style))
+    story.append(Spacer(1, 0.4*inch))
+    
+    for question in sorted(exam.questions, key=lambda q: q.number):
+        story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
+        
+        question_text = question.text or ""
+        if question_text:
+            story.append(Paragraph(question_text, normal_style))
+        
+        story.append(Spacer(1, 0.3*inch))
+        story.append(Paragraph("Answer:", normal_style))
+        story.append(Spacer(1, 1*inch))
+    
+    doc.build(story)
+    buffer.seek(0)
+    
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={exam.title.replace(' ', '_')}.pdf"}
+    )
 
 
 
