@@ -1,0 +1,8 @@
+streamlit
+fastapi
+uvicorn
+scikit-learn
+numpy
+pandas
+altair
+sentence-transformers

@@ -1,0 +1,16 @@
+Model Evaluation Results
+======================================================================
+
+Test cases: 300
+
+ML Model:
+  Accuracy: 99.7%
+  Precision: 99.5%
+  Recall: 100.0%
+  F1-Score: 0.998
+
+Baseline Model:
+  Accuracy: 99.7%
+  Precision: 99.5%
+  Recall: 100.0%
+  F1-Score: 0.998
