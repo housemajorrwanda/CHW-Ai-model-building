@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from typing import List, Optional, Tuple
 import os
+import re
 from pathlib import Path
 import shutil
 from datetime import datetime, timedelta
@@ -16,8 +17,10 @@ import jwt
 from database import get_db, init_db, engine
 import models
 import schemas
-from math_grader import MathGrader, Step as GraderStep
+from math_grader import Step as GraderStep
+from hybrid_grader import HybridGrader
 from ocr.ocr_pipeline import OCRProcessor
+from exam_parser import ExamParser
 
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -683,6 +686,105 @@ def create_exam(
     return get_exams(db=db, current_user=current_user)[0]  # Return first (newly created)
 
 
+@app.post("/api/exams/upload")
+async def upload_exam(
+    course_id: str = Form(...),
+    file: UploadFile = File(...),
+    due_date: Optional[str] = Form(None),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload an exam file (text, image, or PDF) and automatically extract questions"""
+    if current_user.role != models.UserRole.PROFESSOR:
+        raise HTTPException(status_code=403, detail="Only professors can upload exams")
+    
+    try:
+        file_content = await file.read()
+        file_ext = Path(file.filename).suffix.lower()
+        
+        if file_ext in ['.txt']:
+            text = file_content.decode('utf-8')
+        elif file_ext in ['.jpg', '.jpeg', '.png', '.pdf']:
+            temp_path = UPLOAD_DIR / f"temp_exam_{file.filename}"
+            with open(temp_path, 'wb') as f:
+                f.write(file_content)
+            
+            try:
+                if file_ext == '.pdf':
+                    from pdf2image import convert_from_path
+                    images = convert_from_path(str(temp_path))
+                    text_parts = []
+                    for img in images:
+                        img_path = UPLOAD_DIR / f"temp_page.jpg"
+                        img.save(str(img_path))
+                        extracted = ocr_processor.process_image(str(img_path))
+                        text_parts.append(extracted['text'])
+                        img_path.unlink()
+                    text = '\n\n'.join(text_parts)
+                else:
+                    extracted = ocr_processor.process_image(str(temp_path))
+                    text = extracted['text']
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Use .txt, .jpg, .png, or .pdf")
+        
+        parser = ExamParser()
+        parsed_exam = parser.parse_exam(text)
+        
+        if not parsed_exam['questions']:
+            raise HTTPException(status_code=400, detail="No questions found in the uploaded file. Please check the format.")
+        
+        new_exam = models.Exam(
+            course_id=course_id,
+            title=parsed_exam['title'],
+            description=parsed_exam['description'],
+            total_points=parsed_exam['total_points'],
+            due_date=datetime.fromisoformat(due_date) if due_date else None
+        )
+        db.add(new_exam)
+        db.flush()
+        
+        for question_data in parsed_exam['questions']:
+            new_question = models.Question(
+                exam_id=new_exam.id,
+                number=question_data['number'],
+                text=question_data['text'],
+                points=question_data['points']
+            )
+            db.add(new_question)
+            db.flush()
+            
+            for step_data in question_data['gold_solution_steps']:
+                new_step = models.GoldSolutionStep(
+                    question_id=new_question.id,
+                    step_number=step_data['step_number'],
+                    description=step_data['description'],
+                    expression=step_data['expression'],
+                    points=step_data['points'],
+                    required=step_data['required']
+                )
+                db.add(new_step)
+        
+        db.commit()
+        db.refresh(new_exam)
+        
+        return {
+            "message": "Exam uploaded and parsed successfully",
+            "exam_id": new_exam.id,
+            "title": new_exam.title,
+            "questions_found": len(parsed_exam['questions']),
+            "total_points": parsed_exam['total_points']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading exam: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing exam file: {str(e)}")
+
+
 @app.get("/api/exams/{exam_id}", response_model=schemas.ExamResponse)
 def get_exam(
     exam_id: str,
@@ -1069,8 +1171,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                 print(f"  Gold steps ({len(gold_steps)}): {[gs.content for gs in gold_steps]}")
                 print(f"  Student steps ({len(student_steps)}): {student_steps}")
                 
-                # Use MathGrader to evaluate
-                grader = MathGrader(gold_steps)
+                grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
                 
                 print(f"  Grading result: {grading_result['total_score']}/{grading_result['max_score']} ({grading_result['percentage']:.1f}%)")
@@ -1168,8 +1269,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                 if not gold_steps:
                     continue
                 
-                # Use MathGrader to evaluate
-                grader = MathGrader(gold_steps)
+                grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
                 
                 # Store grading result
@@ -1622,8 +1722,7 @@ async def grade_submission(
                 if not gold_steps:
                     continue
                 
-                # Use MathGrader to evaluate
-                grader = MathGrader(gold_steps)
+                grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
                 
                 # Store grading result
@@ -1701,8 +1800,7 @@ async def grade_submission(
                     for step in question.gold_steps
                 ]
                 
-                # Create grader and grade
-                grader = MathGrader(gold_steps)
+                grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
                 
                 # Store grading result

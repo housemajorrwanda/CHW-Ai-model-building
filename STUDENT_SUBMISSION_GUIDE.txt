@@ -1,0 +1,281 @@
+====================================================
+      STUDENT SUBMISSION GUIDE
+====================================================
+
+How to submit your exam answers in the MathGrade system.
+
+
+====================================================
+           SUBMISSION OPTIONS
+====================================================
+
+You have TWO ways to submit your exam:
+
+1. TYPE YOUR ANSWERS IN THE SYSTEM
+   - Use the online exam interface
+   - Type each answer in the provided text box
+   - Mathematical notation supported
+   - Real-time auto-save
+   - Can edit until final submission
+
+2. UPLOAD HANDWRITTEN/SCANNED WORK
+   - Write answers on paper
+   - Take clear photos or scan pages
+   - Upload images or PDF
+   - System extracts text using OCR
+   - AI grades your work automatically
+
+
+====================================================
+        OPTION 1: TYPING ANSWERS
+====================================================
+
+STEP BY STEP:
+1. Open the exam in the system
+2. Read each question carefully
+3. Type your answer in the answer box
+4. Show your work step-by-step
+5. Click Submit when complete
+
+FORMAT TIPS:
+- Write each step on a new line
+- Use clear mathematical notation
+- For equations: 2x + 3 = 7
+- For steps: Start with = sign
+- Example:
+  2x + 3 = 7
+  = 2x = 4
+  = x = 2
+
+SUPPORTED MATH NOTATION:
+- Basic: +, -, *, /, =
+- Powers: x^2, 2^3
+- Fractions: (a+b)/c
+- Square root: √x or sqrt(x)
+- Parentheses: (2x + 3)
+
+
+====================================================
+       OPTION 2: UPLOADING WORK
+====================================================
+
+PREPARING YOUR WORK:
+
+For Handwritten Solutions:
+✓ Write clearly and legibly
+✓ Use dark pen or pencil (not light/faded)
+✓ White paper preferred
+✓ One question per page (recommended)
+✓ Number each question clearly
+✓ Show all your work
+
+For Photos:
+✓ Good lighting (avoid shadows)
+✓ Hold camera steady
+✓ Keep paper flat
+✓ Page should be horizontal
+✓ Fill the frame with your work
+✓ High contrast (dark writing, light paper)
+
+For Scanned Documents:
+✓ 300 DPI or higher
+✓ Black & white or color
+✓ Save as PDF or image
+✓ Clean, straight scan
+
+
+FILE FORMATS SUPPORTED:
+✓ .jpg / .jpeg
+✓ .png
+✓ .pdf (single or multi-page)
+✓ .heic (iPhone photos)
+
+Maximum file size: 10 MB per file
+
+
+UPLOADING PROCESS:
+1. Click "Upload Answer" button
+2. Select your file(s)
+3. You can upload multiple files (one per question or all together)
+4. Review preview (if shown)
+5. Click "Submit Exam"
+
+The system will:
+- Extract text from your images using OCR
+- Parse your solution steps
+- Grade automatically using AI
+- Provide feedback on each step
+
+
+====================================================
+          BEST PRACTICES
+====================================================
+
+SHOWING YOUR WORK:
+✓ Write each step clearly
+✓ Label steps if needed ("Step 1", "Step 2")
+✓ Show intermediate calculations
+✓ State your reasoning for word problems
+✓ Box or underline final answers
+
+FORMATTING:
+✓ Use consistent notation
+✓ Keep work organized
+✓ Use proper mathematical symbols
+✓ Write legibly (for handwritten)
+
+BEFORE SUBMITTING:
+□ Check all questions answered
+□ Review your work for errors
+□ Ensure images are clear (if uploading)
+□ Verify file format is supported
+□ Make sure pages are in order
+
+
+====================================================
+          GRADING SYSTEM
+====================================================
+
+HOW YOUR WORK IS GRADED:
+
+Automatic AI Grading:
+- Compares your steps to model solution
+- Checks mathematical equivalence
+- Understands paraphrased explanations
+- Partial credit for correct reasoning
+- Immediate feedback provided
+
+What the AI Checks:
+✓ Correct final answer
+✓ Valid intermediate steps
+✓ Mathematical equivalence
+✓ Logical reasoning
+✓ Work shown completely
+
+Partial Credit:
+- Correct method, small error: High partial credit
+- Right approach, wrong calculation: Moderate credit
+- Correct concepts, incomplete work: Some credit
+- Wrong approach: Limited or no credit
+
+
+====================================================
+          EXAMPLE SUBMISSIONS
+====================================================
+
+GOOD EXAMPLE - Math Problem:
+
+Question: Solve 3x - 7 = 14
+
+Typed Answer:
+3x - 7 = 14
+3x = 21
+x = 7
+
+OR Handwritten:
+[Clear photo showing]:
+3x - 7 = 14
+Add 7 to both sides:
+3x = 21
+Divide by 3:
+x = 7
+
+
+BAD EXAMPLE:
+
+x = 7
+
+(No work shown - limited credit even if correct!)
+
+
+GOOD EXAMPLE - Word Problem:
+
+Question: Explain photosynthesis
+
+Typed Answer:
+Photosynthesis is the process plants use to convert light energy into chemical energy. Plants take in carbon dioxide from the air and water from the soil. Using chlorophyll in their chloroplasts, they capture sunlight energy. This energy converts CO2 and H2O into glucose (sugar) and oxygen. The oxygen is released as a byproduct while glucose is used for energy and growth.
+
+
+====================================================
+         TROUBLESHOOTING
+====================================================
+
+"OCR couldn't read my work":
+→ Retake photo with better lighting
+→ Use darker pen/pencil
+→ Ensure text is horizontal
+→ Try typing answer instead
+
+"File upload failed":
+→ Check file size (max 10 MB)
+→ Verify file format is supported
+→ Try compressing image
+→ Split multi-page PDF into smaller files
+
+"Low score but work is correct":
+→ Check if you showed all steps
+→ Review feedback for what's missing
+→ Ensure mathematical notation is clear
+→ Contact professor if score seems wrong
+
+"Can't edit after submission":
+→ Submissions are final once submitted
+→ Request resubmission from professor if needed
+→ Use "Save Draft" to save without submitting
+
+
+====================================================
+          SUBMISSION CHECKLIST
+====================================================
+
+Before Final Submit:
+□ All questions answered
+□ Work shown for each problem
+□ Steps clearly labeled
+□ Final answers marked
+□ Images clear and readable (if uploading)
+□ Files under size limit
+□ Pages in correct order
+□ Name/ID visible (if required)
+□ Reviewed for errors
+
+
+====================================================
+          TIPS FOR SUCCESS
+====================================================
+
+1. Show Your Work
+   Even if answer is correct, showing steps ensures full credit
+
+2. Be Clear and Organized
+   Graders (AI and human) can follow your logic better
+
+3. Use Standard Notation
+   Consistent mathematical symbols help AI recognition
+
+4. Check Your Work
+   Review answers before submission
+
+5. Submit Early
+   Don't wait until last minute in case of technical issues
+
+6. Keep Backups
+   Save photos/scans of your work before uploading
+
+7. Ask Questions
+   If format is unclear, ask professor before submission
+
+
+====================================================
+          TECHNICAL SUPPORT
+====================================================
+
+If you experience technical issues:
+- Check internet connection
+- Try different browser
+- Clear browser cache
+- Update to latest browser version
+- Contact support with error message
+
+
+Good luck on your exam!

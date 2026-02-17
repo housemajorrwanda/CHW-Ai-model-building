@@ -197,6 +197,22 @@ export const examsAPI = {
     if (!response.ok) throw new Error('Failed to download PDF');
     return response.blob();
   },
+
+  async upload(formData: FormData) {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/exams/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || 'Failed to upload exam');
+    }
+    return response.json();
+  },
 };
 
 // ============================================================================

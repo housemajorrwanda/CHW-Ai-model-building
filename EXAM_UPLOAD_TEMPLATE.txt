@@ -1,0 +1,190 @@
+====================================================
+        EXAM UPLOAD TEMPLATE FOR PROFESSORS
+====================================================
+
+Use this format when creating exams to upload. The system will automatically extract questions and gold solutions.
+
+
+EXAM TITLE: [Your Exam Name Here]
+DESCRIPTION: [Brief description or instructions]
+
+
+Question 1: [Your question text here] [5 points]
+Gold Solution:
+Step 1: [First step of solution] [2 points]
+Step 2: [Second step of solution] [2 points]
+Step 3: [Final answer] [1 point]
+
+
+Question 2: [Another question] [3 points]
+Model Answer:
+= [Mathematical expression or explanation]
+= [Next step]
+= [Final answer]
+
+
+Question 3: [Short answer question] [2 points]
+Expected Answer:
+[The correct answer text here]
+
+
+====================================================
+              FORMAT RULES
+====================================================
+
+QUESTIONS:
+- Start with "Question" or "Q" followed by a number
+- Or use numbered format: "1. Question text"
+- Specify points in brackets: [5 points] or [5 pts]
+- If no points specified, defaults to 1 point
+
+GOLD SOLUTIONS:
+- Start with any of these markers:
+  * Gold Solution:
+  * Model Answer:
+  * Solution:
+  * Expected Answer:
+  * Correct Answer:
+  * Answer Key:
+
+SOLUTION STEPS:
+- Label steps as "Step 1:", "Step 2:", etc.
+- Or use numbered format: "1. First step"
+- Or start with = for math: "= expression"
+- Specify points per step: [2 points]
+- If no step breakdown, system creates single step with all points
+
+====================================================
+              EXAMPLE 1: MATH EXAM
+====================================================
+
+Mathematics Midterm Exam
+DESCRIPTION: Solve all problems showing your work. Full credit requires all steps.
+
+Question 1: Solve for x: 2x + 5 = 13 [4 points]
+Gold Solution:
+Step 1: Subtract 5 from both sides: 2x = 8 [2 points]
+Step 2: Divide both sides by 2: x = 4 [2 points]
+
+Question 2: Simplify: (3x + 6) / 3 [3 points]
+Solution:
+= 3(x + 2) / 3
+= x + 2
+
+Question 3: What is the quadratic formula? [2 points]
+Expected Answer:
+x = (-b ± √(b² - 4ac)) / (2a)
+
+
+====================================================
+           EXAMPLE 2: SCIENCE EXAM
+====================================================
+
+Biology Quiz - Cell Structure
+DESCRIPTION: Answer the following questions about cell biology.
+
+Question 1: What is the function of mitochondria? [3 points]
+Model Answer:
+Mitochondria are the powerhouse of the cell. They generate ATP through cellular respiration, providing energy for cellular processes.
+
+Question 2: List three parts of a plant cell not found in animal cells. [3 points]
+Expected Answer:
+1. Cell wall
+2. Chloroplasts
+3. Large central vacuole
+
+Question 3: Explain photosynthesis in simple terms. [4 points]
+Gold Solution:
+Plants use sunlight, water, and carbon dioxide to produce glucose and oxygen. This process occurs in chloroplasts using chlorophyll to capture light energy.
+
+
+====================================================
+              FILE FORMAT OPTIONS
+====================================================
+
+SUPPORTED FORMATS:
+✓ .txt - Plain text file (recommended for best accuracy)
+✓ .pdf - PDF document (OCR will extract text)
+✓ .jpg/.png - Image of typed or handwritten exam (OCR)
+
+BEST PRACTICES:
+- Use clear, consistent formatting
+- One question per section
+- Clearly mark gold solutions
+- Specify points for each question/step
+- For images: Use clear, high-contrast text
+- For handwritten: Write legibly
+
+TIPS FOR OCR (Image/PDF):
+- Use high resolution (300 DPI or higher)
+- Ensure good lighting and contrast
+- Avoid shadows or glare
+- Keep text horizontal
+- Use clear, readable fonts (if typed)
+
+
+====================================================
+               UPLOAD PROCESS
+====================================================
+
+1. Create your exam using the template above
+2. Save as .txt, .pdf, or image file
+3. In the system, go to Create Exam
+4. Click "Upload Exam File"
+5. Select your course
+6. Choose your file
+7. Set due date (optional)
+8. Click Upload
+
+The system will:
+- Extract all questions
+- Parse gold solutions
+- Calculate total points
+- Create the exam ready for students
+
+
+====================================================
+          TROUBLESHOOTING
+====================================================
+
+"No questions found":
+→ Check question numbering format
+→ Ensure "Question" or "Q" appears before number
+
+"Points not recognized":
+→ Use format [X points] or [X pts]
+→ Place points at end of question line
+
+"Steps not parsed":
+→ Use "Step 1:", "Step 2:" format
+→ Or start math steps with =
+→ Place under "Gold Solution:" marker
+
+"OCR errors" (for images/PDF):
+→ Use higher resolution
+→ Ensure text is clear and legible
+→ Try converting to plain text first
+
+
+====================================================
+           QUICK START TEMPLATE
+====================================================
+
+Copy this template to get started:
+
+---
+Exam Title: [Your Title]
+Description: [Instructions]
+
+Question 1: [Question text] [X points]
+Gold Solution:
+Step 1: [Solution step] [Y points]
+Step 2: [Solution step] [Y points]
+
+Question 2: [Question text] [X points]
+Expected Answer:
+[Correct answer text]
+---
+
+
+For assistance, contact support or refer to the documentation.

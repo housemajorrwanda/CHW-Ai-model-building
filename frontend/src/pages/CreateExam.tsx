@@ -16,9 +16,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Save, ArrowLeft, ChevronLeft, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react';
+import { Save, ArrowLeft, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Upload, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { QuestionBuilder, Question } from '@/components/exam-builder/QuestionBuilder';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function CreateExam() {
   const navigate = useNavigate();
@@ -36,9 +37,13 @@ export default function CreateExam() {
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [topbarCollapsed, setTopbarCollapsed] = useState(false);
+  const [creationMode, setCreationMode] = useState<'manual' | 'upload'>('manual');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [dueDate, setDueDate] = useState<string>('');
 
   // Fetch courses
-  const { data: courses = [] } = useQuery({
+  const { data: courses = [], isLoading: coursesLoading } = useQuery({
     queryKey: ['courses'],
     queryFn: () => coursesAPI.getAll(),
     enabled: !!token,
@@ -98,6 +103,33 @@ export default function CreateExam() {
       setIsLoading(false);
     }
   }, [examData, isEditMode]);
+
+  const handleUploadExam = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!uploadFile || !courseId) {
+      toast.error('Please select a course and upload a file');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadFile);
+      formData.append('course_id', courseId);
+      if (dueDate) {
+        formData.append('due_date', dueDate);
+      }
+
+      const result = await examsAPI.upload(formData);
+      toast.success(`Exam uploaded successfully! ${result.questions_found} questions found.`);
+      navigate('/exams');
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to upload exam');
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -204,29 +236,136 @@ export default function CreateExam() {
 
         {/* Header */}
         <div className={`flex-none border-b bg-background transition-all duration-300 overflow-hidden ${topbarCollapsed ? 'max-h-0 p-0' : 'p-6'}`}>
-          <form onSubmit={handleSubmit}>
-            <div className="flex items-start justify-between gap-6">
-              <div className="flex-1 max-w-2xl space-y-4">
-                <div className="flex items-center gap-3">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => navigate('/exams')}
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                  </Button>
-          <div>
-                    <h1 className="text-3xl font-bold tracking-tight">
-                      {isEditMode ? 'Edit Exam' : 'Create Exam'}
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
-                      {isEditMode
-                        ? 'Update your exam questions and solutions'
-                        : 'Enhanced question builder with scientific tools'}
-                    </p>
+          <div className="flex items-center gap-3 mb-4">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => navigate('/exams')}
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">
+                {isEditMode ? 'Edit Exam' : 'Create Exam'}
+              </h1>
+              <p className="text-muted-foreground mt-1">
+                {isEditMode
+                  ? 'Update your exam questions and solutions'
+                  : 'Create manually or upload from file'}
+              </p>
+            </div>
           </div>
-        </div>
+
+          {!isEditMode && (
+            <Tabs value={creationMode} onValueChange={(v) => setCreationMode(v as 'manual' | 'upload')} className="mb-4">
+              <TabsList className="grid w-full max-w-md grid-cols-2">
+                <TabsTrigger value="manual" className="flex items-center gap-2">
+                  <FileText className="h-4 w-4" />
+                  Manual Creation
+                </TabsTrigger>
+                <TabsTrigger value="upload" className="flex items-center gap-2">
+                  <Upload className="h-4 w-4" />
+                  Upload File
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
+
+          {creationMode === 'upload' && !isEditMode ? (
+            <form onSubmit={handleUploadExam}>
+              <div className="flex items-start justify-between gap-6">
+                <div className="flex-1 max-w-2xl space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="upload-course">Course</Label>
+                    {coursesLoading ? (
+                      <p className="text-sm text-muted-foreground">Loading courses...</p>
+                    ) : courses.length === 0 ? (
+                      <p className="text-sm text-red-500">No courses available. Please create a course first.</p>
+                    ) : (
+                      <Select value={courseId} onValueChange={setCourseId}>
+                        <SelectTrigger id="upload-course">
+                          <SelectValue placeholder="Select a course" />
+                        </SelectTrigger>
+                        <SelectContent className="z-50">
+                          {courses.map((course: any) => (
+                            <SelectItem key={course.id} value={course.id}>
+                              {course.code} - {course.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="exam-file">Exam File</Label>
+                    <Input
+                      id="exam-file"
+                      type="file"
+                      accept=".txt,.pdf,.jpg,.jpeg,.png"
+                      onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                      className="cursor-pointer"
+                    />
+                    <p className="text-sm text-muted-foreground">
+                      Supported formats: .txt (recommended), .pdf, .jpg, .png
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="due-date">Due Date (Optional)</Label>
+                    <Input
+                      id="due-date"
+                      type="datetime-local"
+                      value={dueDate}
+                      onChange={(e) => setDueDate(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="rounded-lg border p-4 bg-muted/50">
+                    <h3 className="font-medium mb-2">Format Guidelines</h3>
+                    <ul className="text-sm text-muted-foreground space-y-1">
+                      <li>• Start questions with "Question 1:" or "Q1:"</li>
+                      <li>• Specify points: [5 points]</li>
+                      <li>• Mark solutions with "Gold Solution:" or "Expected Answer:"</li>
+                      <li>• Label steps: "Step 1:" or "1."</li>
+                    </ul>
+                    <a 
+                      href="/exam-template.txt" 
+                      download 
+                      className="text-sm text-primary hover:underline mt-2 inline-block"
+                    >
+                      Download template file
+                    </a>
+                  </div>
+                </div>
+
+                <Card className="w-64 flex-none">
+                  <CardHeader>
+                    <CardTitle className="text-lg">Upload</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <Button
+                      type="submit"
+                      disabled={isUploading || !uploadFile || !courseId}
+                      className="w-full"
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {isUploading ? 'Uploading...' : 'Upload Exam'}
+                    </Button>
+                    {uploadFile && (
+                      <p className="text-sm text-muted-foreground">
+                        File: {uploadFile.name}
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit}>
+              <div className="flex items-start justify-between gap-6">
+                <div className="flex-1 max-w-2xl space-y-4">
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
@@ -245,7 +384,7 @@ export default function CreateExam() {
                   <SelectTrigger>
                     <SelectValue placeholder="Select a course" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-50">
                         {courses.map((course) => (
                       <SelectItem key={course.id} value={course.id}>
                         {course.code} - {course.name}
@@ -303,15 +442,18 @@ export default function CreateExam() {
                           </div>
                         </div>
           </form>
+          )}
                 </div>
 
         {/* Question Builder */}
+        {creationMode === 'manual' && (
         <div className="flex-1 overflow-hidden">
           <QuestionBuilder
             questions={questions}
             onQuestionsChange={setQuestions}
           />
         </div>
+        )}
       </div>
     </DashboardLayout>
   );
