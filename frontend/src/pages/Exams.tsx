@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Search, Calendar, ClipboardList, MoreVertical, Eye, Edit, Trash2 } from 'lucide-react';
+import { Plus, Search, Calendar, ClipboardList, MoreVertical, Eye, Edit, Trash2, X } from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -26,11 +26,13 @@ import { api } from '@/api/client';
 
 export default function Exams() {
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const courseId = searchParams.get('course');
 
-  // Fetch exams
+  // Fetch exams - filter by course if courseId is provided
   const { data: exams, isLoading: examsLoading } = useQuery({
-    queryKey: ['exams'],
-    queryFn: () => api.exams.getAll(),
+    queryKey: ['exams', courseId],
+    queryFn: () => api.exams.getAll(courseId || undefined),
   });
 
   // Fetch courses
@@ -47,7 +49,8 @@ export default function Exams() {
 
   const filteredExams = (exams || []).filter(
     (exam: any) =>
-      exam.title.toLowerCase().includes(searchQuery.toLowerCase())
+      exam.title.toLowerCase().includes(searchQuery.toLowerCase()) &&
+      (!courseId || exam.courseId === courseId)
   );
 
   const getCourse = (courseId: string) => (courses || []).find((c: any) => c.id === courseId);
@@ -59,11 +62,32 @@ export default function Exams() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Exams</h1>
-            <p className="text-muted-foreground mt-1">Create and manage your exams with gold solutions</p>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold tracking-tight">Exams</h1>
+              {courseId && courses && (
+                <Badge variant="secondary" className="text-sm">
+                  {courses.find((c: any) => c.id === courseId)?.name || 'Filtered by Course'}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0 ml-2"
+                    onClick={() => {
+                      setSearchParams({});
+                    }}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </Badge>
+              )}
+            </div>
+            <p className="text-muted-foreground mt-1">
+              {courseId 
+                ? `Exams for ${courses?.find((c: any) => c.id === courseId)?.name || 'this course'}`
+                : 'Create and manage your exams with gold solutions'}
+            </p>
           </div>
           <Button asChild>
-            <Link to="/exams/new">
+            <Link to={courseId ? `/exams/new?courseId=${courseId}` : '/exams/new'}>
               <Plus className="h-4 w-4 mr-2" />
               Create Exam
             </Link>

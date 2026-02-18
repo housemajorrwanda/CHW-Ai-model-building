@@ -5,9 +5,10 @@ interface QuestionDisplayProps {
   questionNumber: number;
   questionText: string | any;
   questionPoints: number;
+  attachments?: Array<{ id: string; filePath: string; filename: string; attachmentType?: string }>;
 }
 
-export function QuestionDisplay({ questionNumber, questionText, questionPoints }: QuestionDisplayProps) {
+export function QuestionDisplay({ questionNumber, questionText, questionPoints, attachments }: QuestionDisplayProps) {
   // Parse richContent if it's a TipTap JSON object
   const renderQuestionContent = () => {
     if (!questionText) return 'No question text';
@@ -123,6 +124,29 @@ export function QuestionDisplay({ questionNumber, questionText, questionPoints }
         <div className="prose prose-sm max-w-none">
           {renderQuestionContent()}
         </div>
+        {attachments && attachments.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <p className="text-sm font-semibold text-muted-foreground">Diagrams / Images</p>
+            <div className="flex flex-wrap gap-4">
+              {attachments.map((att) => {
+                const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+                const origin = apiBase.replace(/\/api\/?$/, '');
+                const src = `${origin}${att.filePath}`;
+                if (att.attachmentType === 'image') {
+                  return (
+                    <img
+                      key={att.id}
+                      src={src}
+                      alt={att.filename}
+                      className="max-w-full max-h-64 rounded-lg border object-contain"
+                    />
+                  );
+                }
+                return null;
+              })}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

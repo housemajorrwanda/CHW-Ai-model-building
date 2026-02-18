@@ -271,6 +271,13 @@ export const submissionsAPI = {
       method: 'POST',
     });
   },
+
+  async adjustGrades(submissionId: string, adjustments: any) {
+    return apiCall(`/submissions/${submissionId}/adjust-grades`, {
+      method: 'PUT',
+      body: JSON.stringify(adjustments),
+    });
+  },
 };
 
 // ============================================================================

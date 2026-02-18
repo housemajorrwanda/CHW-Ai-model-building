@@ -224,6 +224,7 @@ class GoldSolutionStepResponse(BaseModel):
     expression: str
     latex: str
     points: int
+    required: bool = True
     
     class Config:
         from_attributes = True
@@ -264,13 +265,33 @@ class GoldSolutionResponse(BaseModel):
     finalAnswerLatex: str
 
 
+class AttachmentResponse(BaseModel):
+    id: str
+    attachmentType: str
+    filePath: str
+    filename: str
+    mimeType: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EmbeddedContentResponse(BaseModel):
+    id: str
+    contentType: str
+    contentData: dict
+    positionData: Optional[dict] = None
+
+    class Config:
+        from_attributes = True
+
+
 class QuestionResponse(BaseModel):
     id: str
     number: int
     text: str
     points: int
     goldSolution: GoldSolutionResponse
-    # Additional fields for frontend compatibility
     goldSolutionSteps: Optional[List[GoldSolutionStepResponse]] = None
     finalAnswer: Optional[str] = None
     finalAnswerLatex: Optional[str] = None
@@ -279,10 +300,10 @@ class QuestionResponse(BaseModel):
     outlineLevel: Optional[int] = 1
     parentQuestionId: Optional[str] = None
     subQuestions: Optional[List['QuestionResponse']] = []
-    attachments: Optional[List] = []
-    embeddedContent: Optional[List] = []
+    attachments: Optional[List[AttachmentResponse]] = []
+    embeddedContent: Optional[List[EmbeddedContentResponse]] = []
     theories: Optional[List] = []
-    
+
     class Config:
         from_attributes = True
 
@@ -314,6 +335,7 @@ class ExamResponse(BaseModel):
 
 # Step Result Schemas
 class StepResultResponse(BaseModel):
+    id: str
     stepNumber: int
     isCorrect: bool
     score: float
@@ -335,6 +357,7 @@ class ExtractedStepResponse(BaseModel):
 
 # Grading Result Schemas
 class GradingResultResponse(BaseModel):
+    id: str
     score: float
     maxScore: int
     feedback: str
@@ -382,4 +405,21 @@ class DashboardStatsResponse(BaseModel):
     totalSubmissions: int
     pendingGrading: int
     averageScore: Optional[float] = None
+
+
+class StepAdjustmentRequest(BaseModel):
+    stepResultId: str
+    score: Optional[float] = None
+    feedback: Optional[str] = None
+
+
+class GradeAdjustmentItem(BaseModel):
+    gradingResultId: str
+    score: Optional[float] = None
+    feedback: Optional[str] = None
+    stepAdjustments: Optional[List[StepAdjustmentRequest]] = []
+
+
+class GradeAdjustmentRequest(BaseModel):
+    adjustments: List[GradeAdjustmentItem] = []
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { useQuery } from '@tanstack/react-query';
 import { coursesAPI, examsAPI } from '@/lib/api';
@@ -23,9 +23,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function CreateExam() {
   const navigate = useNavigate();
-  const { token } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [searchParams] = useSearchParams();
-  const examId = searchParams.get('examId');
+  const { id: examIdFromRoute } = useParams<{ id: string }>();
+  const examIdFromQuery = searchParams.get('examId');
+  const examId = examIdFromRoute || examIdFromQuery || '';
   const isEditMode = !!examId;
   
   const [title, setTitle] = useState('');
@@ -43,17 +45,35 @@ export default function CreateExam() {
   const [dueDate, setDueDate] = useState<string>('');
 
   // Fetch courses
-  const { data: courses = [], isLoading: coursesLoading } = useQuery({
+  const { data: courses = [], isLoading: coursesLoading, error: coursesError } = useQuery({
     queryKey: ['courses'],
-    queryFn: () => coursesAPI.getAll(),
-    enabled: !!token,
+    queryFn: async () => {
+      try {
+        const data = await coursesAPI.getAll();
+        return data;
+      } catch (error) {
+        console.error('Error loading courses:', error);
+        toast.error('Failed to load courses: ' + (error as Error).message);
+        throw error;
+      }
+    },
+    enabled: isAuthenticated,
   });
 
   // Fetch exam data if editing
-  const { data: examData } = useQuery({
+  const { data: examData, isLoading: examLoading } = useQuery({
     queryKey: ['exam', examId],
-    queryFn: () => examsAPI.getById(examId!),
-    enabled: !!examId && !!token,
+    queryFn: async () => {
+      try {
+        const data = await examsAPI.getById(examId!);
+        return data;
+      } catch (error) {
+        console.error('Error loading exam:', error);
+        toast.error('Failed to load exam: ' + (error as Error).message);
+        throw error;
+      }
+    },
+    enabled: !!examId && isAuthenticated,
   });
 
   // Transform API question format to Question format
@@ -93,7 +113,7 @@ export default function CreateExam() {
       setTitle(examData.title || '');
       setDescription(examData.description || '');
       setCourseId(examData.courseId || '');
-      setDuration(examData.duration || 120);
+      setDuration(120); // Default duration since Exam model doesn't have duration field
       
       // Transform questions
       const transformedQuestions = (examData.questions || []).map((q: any, idx: number) =>
@@ -210,7 +230,7 @@ export default function CreateExam() {
     return sum + q.points + subPoints;
   }, 0);
 
-  if (isLoading && isEditMode) {
+  if ((isLoading || examLoading) && isEditMode) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center h-64">
@@ -280,8 +300,30 @@ export default function CreateExam() {
                     <Label htmlFor="upload-course">Course</Label>
                     {coursesLoading ? (
                       <p className="text-sm text-muted-foreground">Loading courses...</p>
+                    ) : coursesError ? (
+                      <div className="space-y-2">
+                        <p className="text-sm text-red-500">Error loading courses. Please refresh the page.</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => window.location.reload()}
+                        >
+                          Refresh
+                        </Button>
+                      </div>
                     ) : courses.length === 0 ? (
-                      <p className="text-sm text-red-500">No courses available. Please create a course first.</p>
+                      <div className="space-y-2">
+                        <p className="text-sm text-red-500">No courses available. Please create a course first.</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigate('/courses/new')}
+                        >
+                          Create Course
+                        </Button>
+                      </div>
                     ) : (
                       <Select value={courseId} onValueChange={setCourseId}>
                         <SelectTrigger id="upload-course">
@@ -380,18 +422,46 @@ export default function CreateExam() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="course">Course</Label>
-                <Select value={courseId} onValueChange={setCourseId} required>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a course" />
-                  </SelectTrigger>
-                  <SelectContent className="z-50">
-                        {courses.map((course) => (
-                      <SelectItem key={course.id} value={course.id}>
-                        {course.code} - {course.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {coursesLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading courses...</p>
+                ) : coursesError ? (
+                  <div className="space-y-2">
+                    <p className="text-sm text-red-500">Error loading courses. Please refresh the page.</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.location.reload()}
+                    >
+                      Refresh
+                    </Button>
+                  </div>
+                ) : courses.length === 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-sm text-red-500">No courses available. Please create a course first.</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate('/courses/new')}
+                    >
+                      Create Course
+                    </Button>
+                  </div>
+                ) : (
+                  <Select value={courseId} onValueChange={setCourseId} required>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a course" />
+                    </SelectTrigger>
+                    <SelectContent className="z-50">
+                          {courses.map((course) => (
+                        <SelectItem key={course.id} value={course.id}>
+                          {course.code} - {course.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
             </div>
 

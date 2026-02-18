@@ -10,11 +10,13 @@ class ExamParser:
         self.question_patterns = [
             r'(?:question|q)\s*[:\.]?\s*(\d+)',
             r'^\s*(\d+)\s*[\.\)]\s*',
-            r'problem\s*(\d+)'
+            r'^\s*(\d+)\s*:\s*',
+            r'problem\s*(\d+)',
+            r'(?:question|q)\s+(\d+)',
         ]
         
         self.gold_solution_markers = [
-            'gold solution:', 'model answer:', 'solution:', 
+            'gold solution:', 'gold solution', 'model answer:', 'solution:', 
             'expected answer:', 'correct answer:', 'answer key:'
         ]
         
@@ -22,8 +24,38 @@ class ExamParser:
             'step', 'solution step', 'working'
         ]
     
+    def _normalize_ocr_text(self, text: str) -> str:
+        """Fix common OCR glitches and merge broken question headers."""
+        if not text:
+            return text
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        replacements = [
+            (r'Quest1on', 'Question'),
+            (r'quest1on', 'question'),
+            (r'Q1estion', 'Question'),
+            (r'Gold\s*S0lution', 'Gold Solution'),
+            (r'gold\s*s0lution', 'gold solution'),
+            (r'S0lution', 'Solution'),
+        ]
+        for old, new in replacements:
+            text = re.sub(old, new, text, flags=re.IGNORECASE)
+        return text
+    
     def parse_exam(self, text: str) -> Dict:
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        text = self._normalize_ocr_text(text)
+        raw_lines = [line.strip() for line in text.split('\n') if line.strip()]
+        lines = []
+        i = 0
+        while i < len(raw_lines):
+            line = raw_lines[i]
+            if i + 1 < len(raw_lines) and re.match(r'^(?:question|q)\s*$', line, re.IGNORECASE):
+                next_line = raw_lines[i + 1]
+                if re.match(r'^\d+\s*[\.\):]', next_line):
+                    line = line + ' ' + next_line
+                    i += 1
+            lines.append(line)
+            i += 1
         
         title = self._extract_title(lines)
         description = self._extract_description(lines)
@@ -98,10 +130,10 @@ class ExamParser:
                 text_part = re.sub(r'^\s*\d+\s*[\.\)]\s*', '', text_part).strip()
                 text_part = re.sub(r'^[:\s]+', '', text_part).strip()
                 
-                points_match = re.search(r'\[(\d+)\s*(?:points?|pts?|marks?)\]', text_part, re.IGNORECASE)
+                points_match = re.search(r'[\[\(](\d+)\s*(?:points?|pts?|marks?)[\]\)]', text_part, re.IGNORECASE)
                 if points_match:
                     current_question['points'] = int(points_match.group(1))
-                    text_part = re.sub(r'\[\d+\s*(?:points?|pts?|marks?)\]', '', text_part, flags=re.IGNORECASE).strip()
+                    text_part = re.sub(r'[\[\(]\d+\s*(?:points?|pts?|marks?)[\]\)]', '', text_part, flags=re.IGNORECASE).strip()
                 
                 if text_part:
                     current_question['text'] = text_part
@@ -126,10 +158,10 @@ class ExamParser:
                             current_steps.append(step)
                 
                 elif current_section == 'text':
-                    points_match = re.search(r'\[(\d+)\s*(?:points?|pts?|marks?)\]', lower)
+                    points_match = re.search(r'[\[\(](\d+)\s*(?:points?|pts?|marks?)[\]\)]', lower)
                     if points_match:
                         current_question['points'] = int(points_match.group(1))
-                        line = re.sub(r'\[\d+\s*(?:points?|pts?|marks?)\]', '', line, flags=re.IGNORECASE).strip()
+                        line = re.sub(r'[\[\(]\d+\s*(?:points?|pts?|marks?)[\]\)]', '', line, flags=re.IGNORECASE).strip()
                     
                     if line:
                         current_question['text'] += ' ' + line
@@ -181,10 +213,10 @@ class ExamParser:
         clean_line = re.sub(r'^\s*\d+[\.\)]\s*', '', clean_line).strip()
         
         points = 1
-        points_match = re.search(r'\[(\d+)\s*(?:points?|pts?)\]', clean_line, re.IGNORECASE)
+        points_match = re.search(r'[\[\(](\d+)\s*(?:points?|pts?|marks?)[\]\)]', clean_line, re.IGNORECASE)
         if points_match:
             points = int(points_match.group(1))
-            clean_line = re.sub(r'\[\d+\s*(?:points?|pts?)\]', '', clean_line, flags=re.IGNORECASE).strip()
+            clean_line = re.sub(r'[\[\(]\d+\s*(?:points?|pts?|marks?)[\]\)]', '', clean_line, flags=re.IGNORECASE).strip()
         
         return {
             'step_number': step_number,

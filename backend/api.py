@@ -9,10 +9,13 @@ from sqlalchemy import func
 from typing import List, Optional, Tuple
 import os
 import re
+import logging
 from pathlib import Path
 import shutil
 from datetime import datetime, timedelta
 import jwt
+
+logger = logging.getLogger(__name__)
 
 from database import get_db, init_db, engine
 import models
@@ -590,7 +593,7 @@ def get_exams(
                 schemas.QuestionResponse(
                     id=question.id,
                     number=question.number,
-                    text=question.text,
+                    text=_display_safe_text(question.text),
                     points=question.points,
                     goldSolution=schemas.GoldSolutionResponse(
                         steps=gold_steps,
@@ -615,8 +618,8 @@ def get_exams(
             schemas.ExamResponse(
                 id=exam.id,
                 courseId=exam.course_id,
-                title=exam.title,
-                description=exam.description,
+                title=_display_safe_text(exam.title),
+                description=_display_safe_text(exam.description) if exam.description else None,
                 questions=questions_data,
                 totalPoints=exam.total_points,
                 dueDate=exam.due_date,
@@ -702,31 +705,45 @@ async def upload_exam(
         file_content = await file.read()
         file_ext = Path(file.filename).suffix.lower()
         
+        page_images = []
         if file_ext in ['.txt']:
             text = file_content.decode('utf-8')
         elif file_ext in ['.jpg', '.jpeg', '.png', '.pdf']:
-            temp_path = UPLOAD_DIR / f"temp_exam_{file.filename}"
-            with open(temp_path, 'wb') as f:
-                f.write(file_content)
-            
             try:
-                if file_ext == '.pdf':
-                    from pdf2image import convert_from_path
-                    images = convert_from_path(str(temp_path))
-                    text_parts = []
-                    for img in images:
-                        img_path = UPLOAD_DIR / f"temp_page.jpg"
-                        img.save(str(img_path))
-                        extracted = ocr_processor.process_image(str(img_path))
-                        text_parts.append(extracted['text'])
-                        img_path.unlink()
-                    text = '\n\n'.join(text_parts)
-                else:
-                    extracted = ocr_processor.process_image(str(temp_path))
-                    text = extracted['text']
-            finally:
-                if temp_path.exists():
-                    temp_path.unlink()
+                ocr_result = ocr_processor.extract_steps_from_file(file_content, file.filename or "upload")
+                text = ocr_result.combined_text
+                try:
+                    from PIL import Image as PILImage
+                    import io
+                    if file_ext == '.pdf':
+                        from pdf2image import convert_from_bytes
+                        orig_pil = convert_from_bytes(file_content, dpi=150)
+                        page_images = []
+                        for pil_img in orig_pil:
+                            buf = io.BytesIO()
+                            pil_img.convert("RGB").save(buf, format="PNG")
+                            page_images.append(buf.getvalue())
+                    else:
+                        pil_img = PILImage.open(io.BytesIO(file_content)).convert("RGB")
+                        buf = io.BytesIO()
+                        pil_img.save(buf, format="PNG")
+                        page_images = [buf.getvalue()]
+                except Exception as e:
+                    logger.warning(f"Original page images failed, using OCR previews: {e}")
+                    page_images = getattr(ocr_result, "processed_previews", []) or []
+                if not text and file_ext == '.pdf':
+                    raise HTTPException(
+                        status_code=400,
+                        detail="PDF processing requires poppler. Install it (e.g. brew install poppler on macOS) or upload as .txt instead."
+                    )
+            except HTTPException:
+                raise
+            except Exception as ocr_err:
+                logger.warning(f"OCR failed for exam upload: {ocr_err}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error processing exam file: {ocr_err}"
+                )
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Use .txt, .jpg, .png, or .pdf")
         
@@ -734,27 +751,65 @@ async def upload_exam(
         parsed_exam = parser.parse_exam(text)
         
         if not parsed_exam['questions']:
-            raise HTTPException(status_code=400, detail="No questions found in the uploaded file. Please check the format.")
+            if text.strip() and file_ext in ['.jpg', '.jpeg', '.png', '.pdf']:
+                parsed_exam['questions'] = [{
+                    'number': 1,
+                    'text': text.strip()[:10000],
+                    'points': 10,
+                    'gold_solution_steps': [{
+                        'step_number': 1,
+                        'description': 'Solution',
+                        'expression': '',
+                        'points': 10,
+                        'required': True
+                    }]
+                }]
+                parsed_exam['total_points'] = 10
+            else:
+                raise HTTPException(status_code=400, detail="No questions found in the uploaded file. Please check the format.")
         
         new_exam = models.Exam(
             course_id=course_id,
-            title=parsed_exam['title'],
-            description=parsed_exam['description'],
+            title=_display_safe_text(parsed_exam['title']),
+            description=_display_safe_text(parsed_exam.get('description') or ''),
             total_points=parsed_exam['total_points'],
             due_date=datetime.fromisoformat(due_date) if due_date else None
         )
         db.add(new_exam)
         db.flush()
         
-        for question_data in parsed_exam['questions']:
+        exam_attach_dir = UPLOAD_DIR / "exam_attachments" / new_exam.id
+        exam_attach_dir.mkdir(parents=True, exist_ok=True)
+        
+        for q_idx, question_data in enumerate(parsed_exam['questions']):
             new_question = models.Question(
                 exam_id=new_exam.id,
                 number=question_data['number'],
-                text=question_data['text'],
+                text=_display_safe_text(question_data.get('text') or ''),
                 points=question_data['points']
             )
             db.add(new_question)
             db.flush()
+            
+            if page_images:
+                img_idx = min(q_idx, len(page_images) - 1)
+                try:
+                    png_bytes = page_images[img_idx]
+                    safe_name = f"q{question_data['number']}_page.png"
+                    out_path = exam_attach_dir / safe_name
+                    with open(out_path, "wb") as f:
+                        f.write(png_bytes)
+                    rel_path = f"exam_attachments/{new_exam.id}/{safe_name}"
+                    att = models.QuestionAttachment(
+                        question_id=new_question.id,
+                        attachment_type="image",
+                        file_path=rel_path,
+                        filename=safe_name,
+                        mime_type="image/png",
+                    )
+                    db.add(att)
+                except Exception as e:
+                    logger.warning(f"Could not save page image for question: {e}")
             
             for step_data in question_data['gold_solution_steps']:
                 new_step = models.GoldSolutionStep(
@@ -785,6 +840,40 @@ async def upload_exam(
         raise HTTPException(status_code=500, detail=f"Error processing exam file: {str(e)}")
 
 
+security_optional = HTTPBearer(auto_error=False)
+
+
+@app.get("/api/attachments/{attachment_id}/file")
+def serve_attachment(
+    attachment_id: str,
+    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)
+):
+    """Serve a question attachment file (image, etc.). Public for published exam attachments."""
+    att = db.query(models.QuestionAttachment).filter(models.QuestionAttachment.id == attachment_id).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    allowed = False
+    if credentials:
+        try:
+            get_current_user(credentials, db)
+            allowed = True
+        except Exception:
+            pass
+    if not allowed:
+        question = db.query(models.Question).filter(models.Question.id == att.question_id).first()
+        if not question:
+            raise HTTPException(status_code=404, detail="Not found")
+        exam = db.query(models.Exam).filter(models.Exam.id == question.exam_id).first()
+        if not exam or not exam.is_published:
+            raise HTTPException(status_code=403, detail="Access denied")
+    path = UPLOAD_DIR / att.file_path
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    from fastapi.responses import FileResponse
+    return FileResponse(path, media_type=att.mime_type or "application/octet-stream", filename=att.filename)
+
+
 @app.get("/api/exams/{exam_id}", response_model=schemas.ExamResponse)
 def get_exam(
     exam_id: str,
@@ -792,11 +881,15 @@ def get_exam(
     db: Session = Depends(get_db)
 ):
     """Get a specific exam by ID"""
-    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
+    exam = db.query(models.Exam).options(
+        selectinload(models.Exam.questions).options(
+            selectinload(models.Question.attachments),
+            selectinload(models.Question.embedded_content),
+        )
+    ).filter(models.Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
-    # Build response
     questions_data = []
     for question in exam.questions:
         gold_steps = [
@@ -805,23 +898,51 @@ def get_exam(
                 description=step.description or "",
                 expression=step.expression,
                 latex=step.latex or "",
-                points=step.points
+                points=step.points,
+                required=getattr(step, 'required', True)
             )
             for step in question.gold_steps
         ]
+        attachments_data = [
+            schemas.AttachmentResponse(
+                id=a.id,
+                attachmentType=a.attachment_type,
+                filePath=f"/api/attachments/{a.id}/file",
+                filename=a.filename,
+                mimeType=a.mime_type,
+            )
+            for a in question.attachments
+        ]
+        embedded_data = []
+        for ec in question.embedded_content:
+            try:
+                import json
+                content_data = json.loads(ec.content_data) if isinstance(ec.content_data, str) else (ec.content_data or {})
+                position_data = json.loads(ec.position_data) if isinstance(ec.position_data, str) and ec.position_data else None
+            except Exception:
+                content_data = {}
+                position_data = None
+            embedded_data.append(
+                schemas.EmbeddedContentResponse(
+                    id=ec.id,
+                    contentType=ec.content_type,
+                    contentData=content_data,
+                    positionData=position_data,
+                )
+            )
         
         questions_data.append(
             schemas.QuestionResponse(
                 id=question.id,
                 number=question.number,
-                text=question.text,
+                text=_display_safe_text(question.text),
                 points=question.points,
                 goldSolution=schemas.GoldSolutionResponse(
                     steps=gold_steps,
                     finalAnswer=question.final_answer or "",
                     finalAnswerLatex=question.final_answer_latex or ""
                 ),
-                goldSolutionSteps=gold_steps,  # Add flattened version for frontend
+                goldSolutionSteps=gold_steps,
                 finalAnswer=question.final_answer or "",
                 finalAnswerLatex=question.final_answer_latex or "",
                 questionType=getattr(question, 'question_type', 'standard'),
@@ -829,8 +950,8 @@ def get_exam(
                 outlineLevel=getattr(question, 'outline_level', 1),
                 parentQuestionId=getattr(question, 'parent_question_id', None),
                 subQuestions=[],
-                attachments=[],
-                embeddedContent=[],
+                attachments=attachments_data,
+                embeddedContent=embedded_data,
                 theories=[]
             )
         )
@@ -838,8 +959,8 @@ def get_exam(
     return schemas.ExamResponse(
         id=exam.id,
         courseId=exam.course_id,
-        title=exam.title,
-        description=exam.description,
+        title=_display_safe_text(exam.title),
+        description=_display_safe_text(exam.description) if exam.description else None,
         questions=questions_data,
         totalPoints=exam.total_points,
         dueDate=exam.due_date,
@@ -1018,71 +1139,98 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
 def parse_answer_into_steps(answer_text: str) -> List[str]:
     """
     Parse a student's answer into individual steps.
-    Tries to split by common step indicators (newlines, = signs, numbers, etc.)
+    Enhanced to detect steps from single-line typed answers.
     """
     if not answer_text or not answer_text.strip():
         return []
     
-    # Split by newlines first
-    lines = [line.strip() for line in answer_text.split('\n') if line.strip()]
+    text = answer_text.strip()
     
+    # Split by newlines first
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    
+    # Single line - try multiple strategies
     if len(lines) <= 1:
-        # Single line answer - try to split by = signs (common in math)
-        single_line = answer_text.strip()
+        single_line = text
         
-        # Check if it contains multiple = signs (likely multiple steps)
+        # Strategy 1: Split by = signs (math equations)
         if '=' in single_line:
-            # Split by = but keep the = with the right side
-            # Pattern: look for = that's not part of <=, >=, !=, ==
             parts = re.split(r'(?<![<>=!])=(?!=)', single_line)
             if len(parts) > 1:
                 steps = []
-                # First part is the initial expression
                 if parts[0].strip():
                     steps.append(parts[0].strip())
-                # Remaining parts are steps starting with =
                 for i in range(1, len(parts)):
                     step = '=' + parts[i].strip()
-                    if step.strip() != '=':  # Don't add empty steps
+                    if step.strip() != '=':
                         steps.append(step)
                 if steps:
                     return steps
         
-        # If no = signs or splitting didn't work, return as single step
+        # Strategy 2: Split by semicolons (common separator)
+        if ';' in single_line:
+            parts = [p.strip() for p in single_line.split(';') if p.strip()]
+            if len(parts) > 1:
+                return parts
+        
+        # Strategy 3: Split by "then" or "and" (natural language)
+        if re.search(r'\s+(then|and|next|after|followed by)\s+', single_line, re.IGNORECASE):
+            parts = re.split(r'\s+(?:then|and|next|after|followed by)\s+', single_line, flags=re.IGNORECASE)
+            if len(parts) > 1:
+                return [p.strip() for p in parts if p.strip()]
+        
+        # Strategy 4: Split by numbered patterns (1), 2), etc.
+        numbered = re.split(r'\s+\(?\d+\)\s+', single_line)
+        if len(numbered) > 1:
+            return [p.strip() for p in numbered if p.strip()]
+        
         return [single_line] if single_line else []
     
-    # Multiple lines - try to identify steps
+    # Multiple lines - enhanced detection
     steps = []
     current_step = []
     
     for line in lines:
-        # Check if line looks like a new step
+        # Check if line starts a new step
+        is_new_step = False
+        
+        # Pattern 1: Step markers
         if re.match(r'^(step\s*\d+|step|solution|answer|\(?\d+[\.\)])\s*:?\s*', line, re.IGNORECASE):
-            if current_step:
-                steps.append(' '.join(current_step))
-            current_step = [line]
-        # Check if line starts with = (new step in math)
+            is_new_step = True
+        # Pattern 2: Starts with =
         elif line.startswith('='):
-            if current_step:
-                steps.append(' '.join(current_step))
-            current_step = [line]
+            is_new_step = True
+        # Pattern 3: Starts with number followed by punctuation
+        elif re.match(r'^\d+[\.\)]\s+', line):
+            is_new_step = True
+        # Pattern 4: Empty line (double newline)
+        elif not line.strip() and current_step:
+            is_new_step = True
+        
+        if is_new_step and current_step:
+            step_text = ' '.join(current_step).strip()
+            if step_text:
+                steps.append(step_text)
+            current_step = [line] if line.strip() else []
         else:
-            current_step.append(line)
+            if line.strip():
+                current_step.append(line)
     
     # Add last step
     if current_step:
-        steps.append(' '.join(current_step))
+        step_text = ' '.join(current_step).strip()
+        if step_text:
+            steps.append(step_text)
     
-    # If no clear steps found, split by double newlines or return as single step
-    if not steps:
-        # Try splitting by double newlines
-        double_newline_split = [s.strip() for s in answer_text.split('\n\n') if s.strip()]
+    # Fallback: split by double newlines
+    if len(steps) <= 1:
+        double_newline_split = [s.strip() for s in text.split('\n\n') if s.strip()]
         if len(double_newline_split) > 1:
             steps = double_newline_split
         else:
-            steps = [answer_text.strip()]
+            steps = [text.strip()]
     
-    return steps
+    return steps if steps else [text.strip()]
 
 
 async def grade_submission_automatically(submission_id: str, db: Session):
@@ -1438,6 +1586,7 @@ def get_submissions(
             graded_question_ids.add(grading_result.question_id)
             step_results = [
                 schemas.StepResultResponse(
+                    id=step.id,
                     stepNumber=step.step_number,
                     isCorrect=step.is_correct,
                     score=step.score,
@@ -1459,6 +1608,7 @@ def get_submissions(
                     extractedLatex=grading_result.extracted_latex,
                     extractedSteps=[],
                     gradingResult=schemas.GradingResultResponse(
+                        id=grading_result.id,
                         score=grading_result.score,
                         maxScore=grading_result.max_score,
                         feedback=grading_result.feedback or "",
@@ -1558,6 +1708,7 @@ def get_submission(
         graded_question_ids.add(grading_result.question_id)
         step_results = [
             schemas.StepResultResponse(
+                id=step.id,
                 stepNumber=step.step_number,
                 isCorrect=step.is_correct,
                 score=step.score,
@@ -1579,6 +1730,7 @@ def get_submission(
                 extractedLatex=grading_result.extracted_latex,
                 extractedSteps=[],
                 gradingResult=schemas.GradingResultResponse(
+                    id=grading_result.id,
                     score=grading_result.score,
                     maxScore=grading_result.max_score,
                     feedback=grading_result.feedback or "",
@@ -1853,6 +2005,63 @@ async def grade_submission(
     }
 
 
+@app.put("/api/submissions/{submission_id}/adjust-grades")
+async def adjust_grades(
+    submission_id: str,
+    adjustments: schemas.GradeAdjustmentRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Adjust grades and add feedback before approval"""
+    if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only professors can adjust grades")
+    
+    submission = db.query(models.Submission).filter(
+        models.Submission.id == submission_id
+    ).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    total_score = 0
+    
+    for adj in adjustments.adjustments:
+        grading_result = db.query(models.GradingResult).filter(
+            models.GradingResult.id == adj.gradingResultId
+        ).first()
+        
+        if not grading_result:
+            continue
+        
+        if adj.score is not None:
+            grading_result.score = adj.score
+        if adj.feedback:
+            grading_result.feedback = adj.feedback
+        
+        if adj.stepAdjustments:
+            for step_adj in adj.stepAdjustments:
+                step_result = db.query(models.StepResult).filter(
+                    models.StepResult.id == step_adj.stepResultId
+                ).first()
+                
+                if step_result:
+                    if step_adj.score is not None:
+                        step_result.score = step_adj.score
+                    if step_adj.feedback:
+                        step_result.feedback = step_adj.feedback
+        
+        total_score += grading_result.score
+    
+    submission.total_score = total_score
+    submission.status = models.SubmissionStatus.AWAITING_APPROVAL
+    db.commit()
+    
+    return {
+        "status": "success",
+        "message": "Grades adjusted successfully",
+        "totalScore": total_score
+    }
+
+
 @app.post("/api/submissions/{submission_id}/approve")
 async def approve_submission(
     submission_id: str,
@@ -2034,6 +2243,105 @@ def health_check():
     return {"status": "healthy"}
 
 
+def _pdf_safe_text(s) -> str:
+    """Make text safe for ReportLab Paragraph (default font is Latin-1 only)."""
+    if s is None:
+        return ""
+    if isinstance(s, bytes):
+        try:
+            s = s.decode("utf-8")
+        except UnicodeDecodeError:
+            s = s.decode("utf-8", errors="replace")
+    if not isinstance(s, str) or not s:
+        return ""
+    try:
+        s = s.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        pass
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s)
+    out = []
+    for c in s:
+        if ord(c) < 128:
+            out.append(c)
+        else:
+            if c in "\u2018\u2019":
+                out.append("'")
+            elif c in "\u201c\u201d":
+                out.append('"')
+            elif c in "\u2014\u2013":
+                out.append("-")
+            elif c == "\u00d7":
+                out.append("x")
+            elif c == "\u00f7":
+                out.append("/")
+            elif c == "\u00b0":
+                out.append(" deg ")
+            elif c == "\u00b2":
+                out.append("^2")
+            elif c == "\u00b3":
+                out.append("^3")
+            elif c == "\u00bd":
+                out.append("1/2")
+            else:
+                out.append(" ")
+    result = "".join(out)
+    result = result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # If text looks like encoding garbage (symbol soup), don't show it
+    if result and len(result) > 25:
+        word_chars = sum(1 for c in result if c.isalnum() or c in " .,;:?!'-/")
+        symbol_soup = sum(1 for c in result if c in "|~=}{\\<>_-+")
+        ratio = word_chars / len(result)
+        # Replace if: low word ratio, or high density of symbol-soup characters
+        if ratio < 0.40 or (symbol_soup / len(result)) > 0.12:
+            return "[Question text could not be displayed]"
+    return result
+
+
+def _display_safe_text(s) -> str:
+    """Clean text for display (fix encoding/garble). Same as _pdf_safe_text but no HTML escape."""
+    if s is None:
+        return ""
+    if isinstance(s, bytes):
+        try:
+            s = s.decode("utf-8")
+        except UnicodeDecodeError:
+            s = s.decode("utf-8", errors="replace")
+    if not isinstance(s, str) or not s:
+        return ""
+    try:
+        s = s.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        pass
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s)
+    out = []
+    for c in s:
+        if ord(c) < 128:
+            out.append(c)
+        elif c in "\u2018\u2019":
+            out.append("'")
+        elif c in "\u201c\u201d":
+            out.append('"')
+        elif c in "\u2014\u2013":
+            out.append("-")
+        elif c == "\u00d7":
+            out.append("x")
+        elif c == "\u00f7":
+            out.append("/")
+        elif c == "\u00b0":
+            out.append(" deg ")
+        elif c == "\u00b2":
+            out.append("^2")
+        elif c == "\u00b3":
+            out.append("^3")
+        elif c == "\u00bd":
+            out.append("1/2")
+        else:
+            out.append(" ")
+    return "".join(out)
+
+
 @app.get("/api/exams/{exam_id}/download")
 async def download_exam_pdf(
     exam_id: str,
@@ -2051,7 +2359,13 @@ async def download_exam_pdf(
     if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
         raise HTTPException(status_code=403, detail="Only professors can download exams")
     
-    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
+    exam = db.query(models.Exam).options(
+        selectinload(models.Exam.questions).options(
+            selectinload(models.Question.attachments),
+            selectinload(models.Question.embedded_content),
+            selectinload(models.Question.gold_steps),
+        )
+    ).filter(models.Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
@@ -2061,7 +2375,27 @@ async def download_exam_pdf(
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72,
                            topMargin=72, bottomMargin=18)
     
+    from reportlab.platypus import Image as RLImage, Table as RLTable, TableStyle
+    from reportlab.lib.utils import ImageReader
     styles = getSampleStyleSheet()
+    
+    def add_image_to_story(path, story, max_w=6.5*inch, max_h=8*inch):
+        try:
+            reader = ImageReader(str(path))
+            iw, ih = reader.getSize()
+            if iw <= 0 or ih <= 0:
+                return
+            aspect = ih / float(iw)
+            w, h = max_w, max_w * aspect
+            if h > max_h:
+                h = max_h
+                w = max_h / aspect
+            img = RLImage(str(path), width=w, height=h)
+            story.append(Spacer(1, 0.15*inch))
+            story.append(img)
+            story.append(Spacer(1, 0.15*inch))
+        except Exception as e:
+            logger.warning(f"Could not add image to PDF: {e}")
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -2081,36 +2415,258 @@ async def download_exam_pdf(
     
     story = []
     
-    story.append(Paragraph(exam.title, title_style))
+    story.append(Paragraph(_pdf_safe_text(exam.title), title_style))
     story.append(Spacer(1, 0.2*inch))
     
     if course:
-        story.append(Paragraph(f"<b>Course:</b> {course.name}", normal_style))
+        story.append(Paragraph(f"<b>Course:</b> {_pdf_safe_text(course.name)}", normal_style))
     if exam.description:
-        story.append(Paragraph(f"<b>Description:</b> {exam.description}", normal_style))
-    story.append(Paragraph(f"<b>Duration:</b> {exam.duration} minutes", normal_style))
+        story.append(Paragraph(f"<b>Description:</b> {_pdf_safe_text(exam.description)}", normal_style))
+    if exam.due_date:
+        story.append(Paragraph(f"<b>Due Date:</b> {exam.due_date.strftime('%Y-%m-%d %H:%M')}", normal_style))
     story.append(Paragraph(f"<b>Total Points:</b> {exam.total_points}", normal_style))
     story.append(Spacer(1, 0.4*inch))
     
-    for question in sorted(exam.questions, key=lambda q: q.number):
-        story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
-        
-        question_text = question.text or ""
-        if question_text:
-            story.append(Paragraph(question_text, normal_style))
-        
-        story.append(Spacer(1, 0.3*inch))
-        story.append(Paragraph("Answer:", normal_style))
-        story.append(Spacer(1, 1*inch))
+    if not exam.questions:
+        story.append(Paragraph("No questions available.", normal_style))
+    else:
+        for question in sorted(exam.questions, key=lambda q: q.number):
+            story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
+            
+            question_text = question.text or ""
+            if question_text:
+                story.append(Paragraph(_pdf_safe_text(question_text), normal_style))
+            for att in getattr(question, "attachments", []) or []:
+                if getattr(att, "attachment_type", "") != "image":
+                    continue
+                path = UPLOAD_DIR / att.file_path
+                if path.exists():
+                    add_image_to_story(path, story)
+            for ec in getattr(question, "embedded_content", []) or []:
+                ct = getattr(ec, "content_type", "") or ""
+                content_data = getattr(ec, "content_data", None)
+                if ct == "table" and content_data:
+                    try:
+                        import json
+                        data = json.loads(content_data) if isinstance(content_data, str) else content_data
+                        raw_rows = data.get("rows") or data.get("data") or []
+                        if raw_rows:
+                            rows = [[str(c) for c in (row if isinstance(row, (list, tuple)) else [row])] for row in raw_rows]
+                            table = RLTable(rows)
+                            table.setStyle(TableStyle([
+                                ("BACKGROUND", (0, 0), (-1, 0), (0.8, 0.8, 0.8)),
+                                ("TEXTCOLOR", (0, 0), (-1, 0), (0, 0, 0)),
+                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                                ("GRID", (0, 0), (-1, -1), 0.5, (0.5, 0.5, 0.5)),
+                                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                            ]))
+                            story.append(Spacer(1, 0.2*inch))
+                            story.append(table)
+                            story.append(Spacer(1, 0.2*inch))
+                    except Exception as e:
+                        logger.warning(f"Could not add table to PDF: {e}")
+            story.append(Spacer(1, 0.3*inch))
+            story.append(Paragraph("Answer:", normal_style))
+            story.append(Spacer(1, 0.5*inch))
+            gold_steps = list(getattr(question, "gold_steps", []) or [])
+            if gold_steps:
+                story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
+                for gs in sorted(gold_steps, key=lambda x: getattr(x, "step_number", 0)):
+                    step_text = _pdf_safe_text(getattr(gs, "expression", "") or getattr(gs, "latex", "") or "")
+                    if step_text:
+                        story.append(Paragraph(f"Step {getattr(gs, 'step_number', 0)}: {step_text}", normal_style))
+                story.append(Spacer(1, 0.4*inch))
+            else:
+                final_ans = getattr(question, "final_answer", None) or getattr(question, "final_answer_latex", None)
+                if final_ans and str(final_ans).strip():
+                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
+                    story.append(Paragraph(_pdf_safe_text(str(final_ans).strip()), normal_style))
+                    story.append(Spacer(1, 0.4*inch))
+                else:
+                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
+                    story.append(Paragraph("<i>No reference solution stored for this question.</i>", normal_style))
+                    story.append(Spacer(1, 0.4*inch))
     
-    doc.build(story)
-    buffer.seek(0)
+    try:
+        doc.build(story)
+        buffer.seek(0)
+    except Exception as e:
+        logger.error(f"Error building PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
     
     from fastapi.responses import StreamingResponse
+    safe_filename = _pdf_safe_text(exam.title).replace(" ", "_").replace("/", "_").replace("\\", "_")[:100]
+    if not safe_filename:
+        safe_filename = "exam"
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={exam.title.replace(' ', '_')}.pdf"}
+        headers={"Content-Disposition": f"attachment; filename={safe_filename}.pdf"}
+    )
+
+
+@app.get("/api/exams/{exam_id}/view-pdf")
+async def view_exam_pdf(
+    exam_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """View/download exam PDF - available to both teachers and students"""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from io import BytesIO
+    
+    exam = db.query(models.Exam).options(
+        selectinload(models.Exam.questions).options(
+            selectinload(models.Question.attachments),
+            selectinload(models.Question.embedded_content),
+            selectinload(models.Question.gold_steps),
+        )
+    ).filter(models.Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    course = db.query(models.Course).filter(models.Course.id == exam.course_id).first()
+    
+    if current_user.role == models.UserRole.STUDENT:
+        if not exam.is_published:
+            raise HTTPException(status_code=403, detail="Exam is not published")
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72,
+                           topMargin=72, bottomMargin=18)
+    
+    from reportlab.platypus import Image as RLImage, Table as RLTable, TableStyle
+    from reportlab.lib.utils import ImageReader
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor='black',
+        spaceAfter=30,
+        alignment=TA_CENTER
+    )
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=14,
+        textColor='black',
+        spaceAfter=12,
+    )
+    normal_style = styles["Normal"]
+    
+    def add_image_to_story_v(path, story, max_w=6.5*inch, max_h=8*inch):
+        try:
+            reader = ImageReader(str(path))
+            iw, ih = reader.getSize()
+            if iw <= 0 or ih <= 0:
+                return
+            aspect = ih / float(iw)
+            w, h = max_w, max_w * aspect
+            if h > max_h:
+                h = max_h
+                w = max_h / aspect
+            img = RLImage(str(path), width=w, height=h)
+            story.append(Spacer(1, 0.15*inch))
+            story.append(img)
+            story.append(Spacer(1, 0.15*inch))
+        except Exception as e:
+            logger.warning(f"Could not add image to PDF: {e}")
+    
+    story = []
+    story.append(Paragraph(_pdf_safe_text(exam.title), title_style))
+    story.append(Spacer(1, 0.2*inch))
+    
+    if course:
+        story.append(Paragraph(f"<b>Course:</b> {_pdf_safe_text(course.name)}", normal_style))
+    if exam.description:
+        story.append(Paragraph(f"<b>Description:</b> {_pdf_safe_text(exam.description)}", normal_style))
+    if exam.due_date:
+        story.append(Paragraph(f"<b>Due Date:</b> {exam.due_date.strftime('%Y-%m-%d %H:%M')}", normal_style))
+    story.append(Paragraph(f"<b>Total Points:</b> {exam.total_points}", normal_style))
+    story.append(Spacer(1, 0.4*inch))
+    
+    if not exam.questions:
+        story.append(Paragraph("No questions available.", normal_style))
+    else:
+        for question in sorted(exam.questions, key=lambda q: q.number):
+            story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
+            
+            question_text = question.text or ""
+            if question_text:
+                story.append(Paragraph(_pdf_safe_text(question_text), normal_style))
+            for att in getattr(question, "attachments", []) or []:
+                if getattr(att, "attachment_type", "") != "image":
+                    continue
+                path = UPLOAD_DIR / att.file_path
+                if path.exists():
+                    add_image_to_story_v(path, story)
+            for ec in getattr(question, "embedded_content", []) or []:
+                ct = getattr(ec, "content_type", "") or ""
+                content_data = getattr(ec, "content_data", None)
+                if ct == "table" and content_data:
+                    try:
+                        import json
+                        data = json.loads(content_data) if isinstance(content_data, str) else content_data
+                        raw_rows = data.get("rows") or data.get("data") or []
+                        if raw_rows:
+                            rows = [[str(c) for c in (row if isinstance(row, (list, tuple)) else [row])] for row in raw_rows]
+                            table = RLTable(rows)
+                            table.setStyle(TableStyle([
+                                ("BACKGROUND", (0, 0), (-1, 0), (0.8, 0.8, 0.8)),
+                                ("TEXTCOLOR", (0, 0), (-1, 0), (0, 0, 0)),
+                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                                ("GRID", (0, 0), (-1, -1), 0.5, (0.5, 0.5, 0.5)),
+                                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                            ]))
+                            story.append(Spacer(1, 0.2*inch))
+                            story.append(table)
+                            story.append(Spacer(1, 0.2*inch))
+                    except Exception as e:
+                        logger.warning(f"Could not add table to PDF: {e}")
+            story.append(Spacer(1, 0.3*inch))
+            story.append(Paragraph("Answer:", normal_style))
+            story.append(Spacer(1, 0.5*inch))
+            gold_steps = list(getattr(question, "gold_steps", []) or [])
+            if gold_steps:
+                story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
+                for gs in sorted(gold_steps, key=lambda x: getattr(x, "step_number", 0)):
+                    step_text = _pdf_safe_text(getattr(gs, "expression", "") or getattr(gs, "latex", "") or "")
+                    if step_text:
+                        story.append(Paragraph(f"Step {getattr(gs, 'step_number', 0)}: {step_text}", normal_style))
+                story.append(Spacer(1, 0.4*inch))
+            else:
+                final_ans = getattr(question, "final_answer", None) or getattr(question, "final_answer_latex", None)
+                if final_ans and str(final_ans).strip():
+                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
+                    story.append(Paragraph(_pdf_safe_text(str(final_ans).strip()), normal_style))
+                    story.append(Spacer(1, 0.4*inch))
+                else:
+                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
+                    story.append(Paragraph("<i>No reference solution stored for this question.</i>", normal_style))
+                    story.append(Spacer(1, 0.4*inch))
+    
+    try:
+        doc.build(story)
+        buffer.seek(0)
+    except Exception as e:
+        logger.error(f"Error building PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
+    
+    from fastapi.responses import StreamingResponse
+    safe_filename = _pdf_safe_text(exam.title).replace(" ", "_").replace("/", "_").replace("\\", "_")[:100]
+    if not safe_filename:
+        safe_filename = "exam"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={safe_filename}.pdf"}
     )
 
 

@@ -16,9 +16,11 @@ import {
   CheckCircle2,
   Image,
   Atom,
+  Download,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
 
 export default function ExamDetail() {
   const { examId } = useParams<{ examId: string }>();
@@ -89,17 +91,32 @@ export default function ExamDetail() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Attachments */}
+          {/* Attachments (images, graphs, shapes) */}
           {question.attachments && question.attachments.length > 0 && (
-            <div>
-              <p className="text-sm font-semibold mb-2">Attachments:</p>
-              <div className="flex flex-wrap gap-2">
-                {question.attachments.map((att: any, idx: number) => (
-                  <Badge key={idx} variant="secondary" className="gap-1">
-                    <Image className="h-3 w-3" />
-                    {att.filename}
-                  </Badge>
-                ))}
+            <div className="space-y-3">
+              <p className="text-sm font-semibold">Diagrams / Images</p>
+              <div className="flex flex-wrap gap-4">
+                {question.attachments.map((att: any) => {
+                  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+                  const origin = apiBase.replace(/\/api\/?$/, '');
+                  const src = `${origin}${att.filePath}`;
+                  if (att.attachmentType === 'image') {
+                    return (
+                      <img
+                        key={att.id}
+                        src={src}
+                        alt={att.filename}
+                        className="max-w-full max-h-80 rounded-lg border object-contain"
+                      />
+                    );
+                  }
+                  return (
+                    <Badge key={att.id} variant="secondary" className="gap-1">
+                      <Image className="h-3 w-3" />
+                      {att.filename}
+                    </Badge>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -228,11 +245,50 @@ export default function ExamDetail() {
               </div>
             </div>
           </div>
-          {user?.role === 'professor' && (
-            <Button variant="outline" onClick={() => navigate(`/exams/new?examId=${examId}`)}>
-              Edit Exam
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                try {
+                  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+                  const token = localStorage.getItem('auth_token');
+                  const response = await fetch(`${API_BASE_URL}/exams/${examId}/view-pdf`, {
+                    headers: {
+                      'Authorization': `Bearer ${token}`,
+                    },
+                  });
+                  if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Failed to download PDF: ${response.status} ${errorText}`);
+                  }
+                  const blob = await response.blob();
+                  if (blob.size === 0) {
+                    throw new Error('Received empty PDF file');
+                  }
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${exam.title.replace(/\s+/g, '_')}.pdf`;
+                  document.body.appendChild(a);
+                  a.click();
+                  window.URL.revokeObjectURL(url);
+                  document.body.removeChild(a);
+                  toast.success('PDF downloaded successfully');
+                } catch (error: any) {
+                  console.error('Failed to download PDF:', error);
+                  toast.error(`Failed to download PDF: ${error.message || 'Unknown error'}`);
+                }
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download PDF
             </Button>
-          )}
+            {user?.role === 'professor' && (
+              <Button variant="outline" onClick={() => navigate(`/exams/new?examId=${examId}`)}>
+                Edit Exam
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Exam Preview */}

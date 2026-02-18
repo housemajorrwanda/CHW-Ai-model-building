@@ -2,14 +2,25 @@ import { useParams } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { Clock, CheckCircle2, XCircle, AlertCircle, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Clock, CheckCircle2, XCircle, AlertCircle, Loader2, Edit, Save, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { submissionsAPI, examsAPI } from '@/lib/api';
+import { useAuth } from '@/contexts/AuthContext';
+import { useState } from 'react';
+import { toast } from 'sonner';
 
 export default function SubmissionDetail() {
   const { id } = useParams();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [editingGrades, setEditingGrades] = useState<Record<string, { score?: number; feedback?: string }>>({});
+  const [editingSteps, setEditingSteps] = useState<Record<string, { score?: number; feedback?: string }>>({});
 
   // Fetch submission details
   const { data: submission, isLoading, error } = useQuery({
@@ -24,6 +35,55 @@ export default function SubmissionDetail() {
     queryFn: () => examsAPI.getById(submission!.examId),
     enabled: !!submission?.examId,
   });
+
+  const adjustGradesMutation = useMutation({
+    mutationFn: (adjustments: any) => submissionsAPI.adjustGrades(id!, adjustments),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['submission', id] });
+      toast.success('Grades adjusted successfully');
+      setEditingGrades({});
+      setEditingSteps({});
+    },
+    onError: (error: any) => {
+      toast.error('Failed to adjust grades: ' + error.message);
+    },
+  });
+
+  const handleSaveGrades = () => {
+    if (!submission?.answers) return;
+
+    const adjustments = {
+      adjustments: submission.answers
+        .filter((answer: any) => answer.gradingResult)
+        .map((answer: any) => {
+          const gradingResultId = answer.gradingResult?.id || answer.gradingResultId;
+          const gradeEdit = editingGrades[gradingResultId];
+          const stepAdjustments = answer.gradingResult?.stepResults
+            ?.map((step: any) => {
+              const stepEdit = editingSteps[step.id];
+              if (!stepEdit || (!stepEdit.score && !stepEdit.feedback)) return null;
+              return {
+                stepResultId: step.id,
+                score: stepEdit.score,
+                feedback: stepEdit.feedback,
+              };
+            })
+            .filter(Boolean) || [];
+
+          if (!gradeEdit && stepAdjustments.length === 0) return null;
+
+          return {
+            gradingResultId,
+            score: gradeEdit?.score,
+            feedback: gradeEdit?.feedback,
+            stepAdjustments,
+          };
+        })
+        .filter(Boolean),
+    };
+
+    adjustGradesMutation.mutate(adjustments);
+  };
 
   if (isLoading) {
     return (
@@ -92,7 +152,15 @@ export default function SubmissionDetail() {
 
         {/* Questions and Answers */}
         <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Detailed Results</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">Detailed Results</h2>
+            {user?.role === 'professor' && submission.status === 'awaiting_approval' && (
+              <Button onClick={handleSaveGrades} disabled={adjustGradesMutation.isPending}>
+                <Save className="h-4 w-4 mr-2" />
+                Save Grade Adjustments
+              </Button>
+            )}
+          </div>
           
           {submission.answers && submission.answers.length > 0 ? (
             submission.answers.map((answer, index) => {
@@ -106,18 +174,40 @@ export default function SubmissionDetail() {
                       <CardTitle className="text-base">
                         Question {answer.questionNumber}
                       </CardTitle>
-                      {result && (
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            result.isCorrect
-                              ? 'bg-success/10 text-success border-success/20'
-                              : 'bg-destructive/10 text-destructive border-destructive/20'
-                          )}
-                        >
-                          {result.score}/{result.maxScore} pts
-                        </Badge>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {result && (
+                          <>
+                            {user?.role === 'professor' && submission.status === 'awaiting_approval' ? (
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  className="w-20 h-8"
+                                  defaultValue={result.score}
+                                  onChange={(e) => {
+                                    const gradingResultId = result.id || answer.gradingResultId;
+                                    setEditingGrades(prev => ({
+                                      ...prev,
+                                      [gradingResultId]: { ...prev[gradingResultId], score: parseFloat(e.target.value) }
+                                    }));
+                                  }}
+                                />
+                                <span>/ {result.maxScore} pts</span>
+                              </div>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  result.isCorrect
+                                    ? 'bg-success/10 text-success border-success/20'
+                                    : 'bg-destructive/10 text-destructive border-destructive/20'
+                                )}
+                              >
+                                {result.score}/{result.maxScore} pts
+                              </Badge>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
                     {question && (
                       <p className="text-sm text-muted-foreground">{question.text}</p>
@@ -157,11 +247,42 @@ export default function SubmissionDetail() {
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
                                 <span className="font-medium text-sm">Step {step.stepNumber}</span>
-                                <Badge variant="secondary" className="text-xs">
-                                  {step.score}/{step.maxScore} pts
-                                </Badge>
+                                {user?.role === 'professor' && submission.status === 'awaiting_approval' ? (
+                                  <div className="flex items-center gap-1">
+                                    <Input
+                                      type="number"
+                                      className="w-16 h-6 text-xs"
+                                      defaultValue={step.score}
+                                      onChange={(e) => {
+                                        setEditingSteps(prev => ({
+                                          ...prev,
+                                          [step.id]: { ...prev[step.id], score: parseFloat(e.target.value) }
+                                        }));
+                                      }}
+                                    />
+                                    <span className="text-xs">/ {step.maxScore} pts</span>
+                                  </div>
+                                ) : (
+                                  <Badge variant="secondary" className="text-xs">
+                                    {step.score}/{step.maxScore} pts
+                                  </Badge>
+                                )}
                               </div>
-                              <p className="text-sm text-muted-foreground">{step.feedback}</p>
+                              {user?.role === 'professor' && submission.status === 'awaiting_approval' ? (
+                                <Textarea
+                                  className="text-sm mt-1"
+                                  defaultValue={step.feedback}
+                                  onChange={(e) => {
+                                    setEditingSteps(prev => ({
+                                      ...prev,
+                                      [step.id]: { ...prev[step.id], feedback: e.target.value }
+                                    }));
+                                  }}
+                                  placeholder="Step feedback..."
+                                />
+                              ) : (
+                                <p className="text-sm text-muted-foreground">{step.feedback}</p>
+                              )}
                               {!step.isCorrect && step.expected && (
                                 <div className="mt-2 text-xs space-y-1">
                                   <p><span className="text-muted-foreground">Expected:</span> <span className="font-mono">{step.expected}</span></p>
@@ -175,7 +296,22 @@ export default function SubmissionDetail() {
                     )}
 
                     {/* Overall Feedback */}
-                    {result?.feedback && result.feedback.trim() !== '' && (
+                    {user?.role === 'professor' && submission.status === 'awaiting_approval' ? (
+                      <div className="space-y-2">
+                        <Label>Feedback</Label>
+                        <Textarea
+                          defaultValue={result?.feedback || ''}
+                          onChange={(e) => {
+                            const gradingResultId = result?.id || answer.gradingResultId;
+                            setEditingGrades(prev => ({
+                              ...prev,
+                              [gradingResultId]: { ...prev[gradingResultId], feedback: e.target.value }
+                            }));
+                          }}
+                          placeholder="Add feedback for this question..."
+                        />
+                      </div>
+                    ) : result?.feedback && result.feedback.trim() !== '' && (
                       <div className="flex items-start gap-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
                         <AlertCircle className="h-5 w-5 text-primary mt-0.5" />
                         <div>

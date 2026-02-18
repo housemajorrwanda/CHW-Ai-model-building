@@ -17,9 +17,86 @@ import {
   UserPlus,
   Award,
   Clock,
+  Eye,
+  Calendar,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Separator } from '@/components/ui/separator';
+import { Link } from 'react-router-dom';
+
+function CourseExamsList({ courseId }: { courseId: string }) {
+  const { data: exams, isLoading } = useQuery({
+    queryKey: ['exams', courseId],
+    queryFn: () => api.exams.getAll(courseId),
+    enabled: !!courseId,
+  });
+
+  if (isLoading) {
+    return <p className="text-center text-muted-foreground py-8">Loading exams...</p>;
+  }
+
+  if (!exams || exams.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-muted-foreground mb-4">No exams created yet</p>
+        <Button asChild>
+          <Link to={`/exams/new?courseId=${courseId}`}>
+            <FileText className="h-4 w-4 mr-2" />
+            Create First Exam
+          </Link>
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {exams.map((exam: any) => (
+        <div
+          key={exam.id}
+          className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+        >
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-1">
+              <h4 className="font-semibold">{exam.title}</h4>
+              {exam.isPublished ? (
+                <Badge variant="default">Published</Badge>
+              ) : (
+                <Badge variant="secondary">Draft</Badge>
+              )}
+            </div>
+            {exam.description && (
+              <p className="text-sm text-muted-foreground mb-2">{exam.description}</p>
+            )}
+            <div className="flex items-center gap-4 text-sm text-muted-foreground">
+              <span>{exam.totalPoints} points</span>
+              {exam.dueDate && (
+                <span>
+                  <Calendar className="h-3 w-3 inline mr-1" />
+                  Due: {format(new Date(exam.dueDate), 'MMM d, yyyy h:mm a')}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/exams/${exam.id}`}>
+                <Eye className="h-4 w-4 mr-2" />
+                View
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/exams/${exam.id}/edit`}>
+                <FileText className="h-4 w-4 mr-2" />
+                Edit
+              </Link>
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function CourseDetail() {
   const { courseId } = useParams<{ courseId: string }>();
@@ -194,6 +271,9 @@ export default function CourseDetail() {
         <Tabs defaultValue="overview" className="space-y-4">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="exams">
+              Exams ({course.examCount || 0})
+            </TabsTrigger>
             <TabsTrigger value="students">
               Students ({course.enrolledStudents.length})
             </TabsTrigger>
@@ -257,6 +337,21 @@ export default function CourseDetail() {
                     ))}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Exams Tab */}
+          <TabsContent value="exams" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Course Exams</CardTitle>
+                <CardDescription>
+                  All exams for this course
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CourseExamsList courseId={courseId!} />
               </CardContent>
             </Card>
           </TabsContent>

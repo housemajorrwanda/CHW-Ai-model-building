@@ -287,6 +287,7 @@ export default function TakeExam() {
                 questionNumber={currentQuestionNumber}
                 questionText={currentQuestion.richContent || currentQuestion.text}
                 questionPoints={currentQuestion.points || 0}
+                attachments={currentQuestion.attachments}
               />
 
               {/* Answer Tabs */}
