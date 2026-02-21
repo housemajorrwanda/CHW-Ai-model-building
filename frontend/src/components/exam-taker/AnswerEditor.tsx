@@ -19,6 +19,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { Toggle } from '@/components/ui/toggle';
 import { useEffect, useState } from 'react';
+import Placeholder from '@tiptap/extension-placeholder';
 import ScientificKeyboard from './ScientificKeyboard';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
@@ -48,8 +49,11 @@ export function AnswerEditor({
       }),
       Superscript,
       Subscript,
+      Placeholder.configure({
+        placeholder: 'Type your answer here...',
+      }),
     ],
-    content: answer || '<p>Type your answer here...</p>',
+    content: answer || '',
     onUpdate: ({ editor }) => {
       onUpdate(editor.getHTML());
     },
@@ -66,9 +70,8 @@ export function AnswerEditor({
   useEffect(() => {
     if (editor) {
       const currentContent = editor.getHTML();
-      const newContent = answer || '<p>Type your answer here...</p>';
+      const newContent = answer || '';
       
-      // Only update if content is different to avoid unnecessary updates
       if (currentContent !== newContent) {
         editor.commands.setContent(newContent, { emitUpdate: false });
       }

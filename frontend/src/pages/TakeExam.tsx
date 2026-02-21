@@ -45,7 +45,7 @@ export default function TakeExam() {
       const initialAnswers = exam.questions.map((q: any, idx: number) => ({
         questionId: q.id || `q-${idx}`,
         questionNumber: q.number || idx + 1,
-        typedAnswer: '<p>Type your answer here...</p>',
+        typedAnswer: '',
         images: [],
       }));
       setAnswers(initialAnswers);
@@ -135,7 +135,7 @@ export default function TakeExam() {
 
   const handleSubmit = async () => {
     // Validate that at least some answers are provided
-    const hasTypedAnswers = answers.some(a => a.typedAnswer.trim() !== '<p>Type your answer here...</p>' && a.typedAnswer.trim() !== '');
+    const hasTypedAnswers = answers.some(a => a.typedAnswer.trim() !== '');
     const hasImageAnswers = answers.some(a => a.images.length > 0);
 
     if (!hasTypedAnswers && !hasImageAnswers) {
@@ -288,6 +288,7 @@ export default function TakeExam() {
                 questionText={currentQuestion.richContent || currentQuestion.text}
                 questionPoints={currentQuestion.points || 0}
                 attachments={currentQuestion.attachments}
+                subQuestions={currentQuestion.subQuestions}
               />
 
               {/* Answer Tabs */}
@@ -313,7 +314,7 @@ export default function TakeExam() {
                         questionNumber={currentQuestionNumber}
                         questionText={currentQuestion.richContent || currentQuestion.text}
                         questionPoints={currentQuestion.points || 0}
-                        answer={currentAnswer?.typedAnswer || '<p>Type your answer here...</p>'}
+                        answer={currentAnswer?.typedAnswer || ''}
                         onUpdate={(newAnswer) => {
                           const questionId = currentQuestion?.id;
                           if (questionId) {

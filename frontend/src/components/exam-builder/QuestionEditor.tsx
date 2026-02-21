@@ -8,6 +8,7 @@ import { Image } from '@tiptap/extension-image';
 import { ShapeExtension } from './extensions/ShapeExtension';
 import { GraphExtension } from './extensions/GraphExtension';
 import { FormulaExtension } from './extensions/FormulaExtension';
+import Placeholder from '@tiptap/extension-placeholder';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -65,8 +66,11 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       ShapeExtension,
       GraphExtension,
       FormulaExtension,
+      Placeholder.configure({
+        placeholder: 'Enter your question here...',
+      }),
     ],
-    content: question.richContent || question.text || '<p>Enter your question here...</p>',
+    content: question.richContent || question.text || '',
     onUpdate: ({ editor }) => {
       onUpdate({
         ...question,
@@ -97,7 +101,7 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       } else if (question.text) {
         editor.commands.setContent(`<p>${question.text}</p>`, { emitUpdate: false });
       } else {
-        editor.commands.setContent('<p>Enter your question here...</p>', { emitUpdate: false });
+        editor.commands.setContent('', { emitUpdate: false });
       }
       
       if (editorRef.current) {

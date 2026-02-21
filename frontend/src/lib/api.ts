@@ -151,6 +151,32 @@ export const coursesAPI = {
 // Exams API
 // ============================================================================
 
+export const attachmentsAPI = {
+  async upload(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const token = getAuthToken();
+    const headers: HeadersInit = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    const response = await fetch(`${API_BASE_URL}/attachments/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(error.detail || `API Error: ${response.status}`);
+    }
+    
+    return response.json();
+  },
+};
+
 export const examsAPI = {
   async getAll(courseId?: string) {
     const query = courseId ? `?course_id=${courseId}` : '';
@@ -173,6 +199,10 @@ export const examsAPI = {
       method: 'PUT',
       body: JSON.stringify(examData),
     });
+  },
+
+  async delete(examId: string) {
+    return apiCall(`/exams/${examId}`, { method: 'DELETE' });
   },
 
   async publish(examId: string) {

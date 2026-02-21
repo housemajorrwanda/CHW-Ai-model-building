@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Upload, Image, Scan, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { attachmentsAPI } from '@/lib/api';
 
 interface MediaUploaderProps {
   onImageUpload: (url: string) => void;
@@ -13,29 +14,43 @@ interface MediaUploaderProps {
 
 export function MediaUploader({ onImageUpload, onAttachmentAdd }: MediaUploaderProps) {
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     setUploadedFiles(acceptedFiles);
+    setUploading(true);
     
-    // For demo, create object URLs
-    acceptedFiles.forEach((file) => {
-      const url = URL.createObjectURL(file);
-      
-      if (file.type.startsWith('image/')) {
-        onImageUpload(url);
+    try {
+      // Upload each file to backend
+      for (const file of acceptedFiles) {
+        try {
+          const attachment = await attachmentsAPI.upload(file);
+          
+          // Get the full URL for display
+          const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+          const fullUrl = apiBaseUrl.replace(/\/api\/?$/, '') + attachment.filePath;
+          
+          if (file.type.startsWith('image/')) {
+            onImageUpload(fullUrl);
+          }
+          
+          onAttachmentAdd({
+            id: attachment.id,
+            attachmentType: attachment.attachmentType,
+            filePath: attachment.filePath,
+            filename: attachment.filename,
+            fileSize: attachment.fileSize,
+            mimeType: attachment.mimeType,
+          });
+          
+          toast.success(`Uploaded: ${file.name}`);
+        } catch (error: any) {
+          toast.error(`Failed to upload ${file.name}: ${error.message}`);
+        }
       }
-      
-      onAttachmentAdd({
-        id: crypto.randomUUID(),
-        attachmentType: file.type.startsWith('image/') ? 'image' : 'document',
-        filePath: url,
-        filename: file.name,
-        fileSize: file.size,
-        mimeType: file.type,
-      });
-      
-      toast.success(`Uploaded: ${file.name}`);
-    });
+    } finally {
+      setUploading(false);
+    }
   }, [onImageUpload, onAttachmentAdd]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -68,16 +83,17 @@ export function MediaUploader({ onImageUpload, onAttachmentAdd }: MediaUploaderP
           {...getRootProps()}
           className={cn(
             'border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors',
-            isDragActive ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50'
+            (isDragActive || uploading) ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50',
+            uploading && 'opacity-50 cursor-wait'
           )}
         >
-          <input {...getInputProps()} />
+          <input {...getInputProps()} disabled={uploading} />
           <Upload className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
           <p className="text-sm font-medium mb-1">
-            {isDragActive ? 'Drop files here' : 'Drag & drop files here'}
+            {uploading ? 'Uploading...' : isDragActive ? 'Drop files here' : 'Drag & drop files here'}
           </p>
           <p className="text-xs text-muted-foreground">
-            Click to browse (Images, PDFs)
+            {uploading ? 'Please wait...' : 'Click to browse (Images, PDFs)'}
           </p>
         </div>
       </TabsContent>

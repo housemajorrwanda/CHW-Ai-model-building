@@ -94,27 +94,191 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
   };
 
   const insertShapeSVG = (shapeData: any) => {
-    const { type, width, height, color, strokeWidth } = shapeData;
-    const w = parseInt(width) || 100;
-    const h = parseInt(height) || 100;
-    const c = color || '#3b82f6';
+    const { type, width, height, color, fillColor, strokeWidth, dimensions = [], angleMarkers = [], radiusLabel, radiusLabelOffsetX = 0, radiusLabelOffsetY = 0 } = shapeData;
+    const w = parseInt(width) || 200;
+    const h = parseInt(height) || 150;
+    const c = color || '#60a5fa';
+    const fill = fillColor || '#dbeafe';
     const sw = parseInt(strokeWidth) || 2;
+    const padding = 40;
+    const svgWidth = w + padding * 2;
+    const svgHeight = h + padding * 2;
+    const shapeX = padding;
+    const shapeY = padding;
 
-    let svgContent = '';
+    let svgParts = [];
+
+    // Render dimension lines
+    const renderDimension = (dim: any) => {
+      const isInside = dim.inside || false;
+      const offset = isInside ? (dim.offset || 0) : ((dim.offset || 0) + 15);
+      const lengthPercent = (dim.length || 100) / 100;
+      const startOffset = dim.startOffset || 0;
+      const endOffset = dim.endOffset || 0;
+      
+      let x1 = 0, y1 = 0, x2 = 0, y2 = 0, textX = 0, textY = 0, textAnchor = 'middle';
+      let lineLength = 0;
+
+      switch (dim.position) {
+        case 'top':
+          lineLength = w * lengthPercent;
+          x1 = shapeX + startOffset;
+          y1 = isInside ? shapeY + offset : shapeY - offset;
+          x2 = shapeX + startOffset + lineLength - endOffset;
+          y2 = isInside ? shapeY + offset : shapeY - offset;
+          textX = shapeX + startOffset + lineLength / 2;
+          textY = isInside ? shapeY + offset - 5 : shapeY - offset - 5;
+          break;
+        case 'bottom':
+          lineLength = w * lengthPercent;
+          x1 = shapeX + startOffset;
+          y1 = isInside ? shapeY + h - offset : shapeY + h + offset;
+          x2 = shapeX + startOffset + lineLength - endOffset;
+          y2 = isInside ? shapeY + h - offset : shapeY + h + offset;
+          textX = shapeX + startOffset + lineLength / 2;
+          textY = isInside ? shapeY + h - offset + 15 : shapeY + h + offset + 15;
+          break;
+        case 'left':
+          lineLength = h * lengthPercent;
+          x1 = isInside ? shapeX + offset : shapeX - offset;
+          y1 = shapeY + startOffset;
+          x2 = isInside ? shapeX + offset : shapeX - offset;
+          y2 = shapeY + startOffset + lineLength - endOffset;
+          textX = isInside ? shapeX + offset - 5 : shapeX - offset - 5;
+          textY = shapeY + startOffset + lineLength / 2;
+          textAnchor = 'end';
+          break;
+        case 'right':
+          lineLength = h * lengthPercent;
+          x1 = isInside ? shapeX + w - offset : shapeX + w + offset;
+          y1 = shapeY + startOffset;
+          x2 = isInside ? shapeX + w - offset : shapeX + w + offset;
+          y2 = shapeY + startOffset + lineLength - endOffset;
+          textX = isInside ? shapeX + w - offset + 15 : shapeX + w + offset + 15;
+          textY = shapeY + startOffset + lineLength / 2;
+          textAnchor = 'start';
+          break;
+        case 'center':
+          textX = shapeX + w / 2;
+          textY = shapeY + h / 2;
+          break;
+      }
+
+      if (dim.position === 'center') {
+        return `<text x="${textX}" y="${textY}" text-anchor="middle" dominant-baseline="middle" font-size="12" fill="#000">${dim.label || ''}</text>`;
+      }
+
+      const arrowDir = isInside ? -1 : 1;
+      
+      // Apply manual text offsets if provided
+      const finalTextX = textX + (dim.textXOffset || 0);
+      const finalTextY = textY + (dim.textYOffset || 0);
+      
+      return `
+        <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#000" stroke-width="1"/>
+        ${dim.position === 'top' || dim.position === 'bottom' ? `
+          <line x1="${x1}" y1="${y1}" x2="${x1}" y2="${y1 + (dim.position === 'top' ? (5 * arrowDir) : (-5 * arrowDir))}" stroke="#000" stroke-width="1"/>
+          <line x1="${x2}" y1="${y2}" x2="${x2}" y2="${y2 + (dim.position === 'bottom' ? (-5 * arrowDir) : (5 * arrowDir))}" stroke="#000" stroke-width="1"/>
+        ` : `
+          <line x1="${x1}" y1="${y1}" x2="${x1 + (dim.position === 'left' ? (-5 * arrowDir) : (5 * arrowDir))}" y2="${y1}" stroke="#000" stroke-width="1"/>
+          <line x1="${x2}" y1="${y2}" x2="${x2 + (dim.position === 'right' ? (5 * arrowDir) : (-5 * arrowDir))}" y2="${y2}" stroke="#000" stroke-width="1"/>
+        `}
+        <text x="${finalTextX}" y="${finalTextY}" text-anchor="${textAnchor}" dominant-baseline="${dim.position === 'top' ? 'baseline' : dim.position === 'bottom' ? 'hanging' : 'middle'}" font-size="12" fill="#000">${dim.label || ''}</text>
+      `;
+    };
+
+    // Render angle markers
+    const renderAngleMarker = (marker: any) => {
+      let x = 0, y = 0;
+      switch (marker.vertex) {
+        case 'top-left':
+          x = shapeX;
+          y = shapeY;
+          break;
+        case 'top-right':
+          x = shapeX + w;
+          y = shapeY;
+          break;
+        case 'bottom-left':
+          x = shapeX;
+          y = shapeY + h;
+          break;
+        case 'bottom-right':
+          x = shapeX + w;
+          y = shapeY + h;
+          break;
+      }
+
+      const size = marker.size || (marker.type === 'right-angle' ? 12 : 15);
+
+      if (marker.type === 'right-angle') {
+        const offsetX = marker.offsetX || 0;
+        const offsetY = marker.offsetY || 0;
+        const finalX = x + offsetX;
+        const finalY = y + offsetY;
+        return `
+          <rect x="${finalX - size}" y="${finalY - size}" width="${size}" height="${size}" fill="none" stroke="#000" stroke-width="1.5"/>
+          ${marker.label ? `<text x="${finalX - size - 5}" y="${finalY - size - 5}" font-size="10" fill="#000">${marker.label}</text>` : ''}
+        `;
+      } else {
+        const radius = size;
+        const offsetX = marker.offsetX || 0;
+        const offsetY = marker.offsetY || 0;
+        const startAngle = (marker.startAngle || 0) * Math.PI / 180;
+        const endAngle = (marker.endAngle || 90) * Math.PI / 180;
+        const rotation = (marker.rotation || 0) * Math.PI / 180;
+        
+        const centerX = x + offsetX;
+        const centerY = y + offsetY;
+        
+        // Calculate arc endpoints with rotation
+        const startX = centerX + radius * Math.cos(startAngle + rotation);
+        const startY = centerY + radius * Math.sin(startAngle + rotation);
+        const endX = centerX + radius * Math.cos(endAngle + rotation);
+        const endY = centerY + radius * Math.sin(endAngle + rotation);
+        
+        // Determine if arc is large (sweep > 180 degrees)
+        const sweepFlag = Math.abs(endAngle - startAngle) > Math.PI ? 1 : 0;
+        
+        return `
+          <path d="M ${startX} ${startY} A ${radius} ${radius} 0 ${sweepFlag} 1 ${endX} ${endY}" fill="none" stroke="#000" stroke-width="2"/>
+          ${marker.label ? `<text x="${centerX + radius / 2}" y="${centerY - radius - 5}" font-size="10" fill="#000">${marker.label}</text>` : ''}
+        `;
+      }
+    };
+
+    // Render shape
     switch (type) {
       case 'circle':
-        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg"><circle cx="${w/2}" cy="${h/2}" r="${Math.min(w,h)/2-5}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        svgParts.push(`<circle cx="${shapeX + w / 2}" cy="${shapeY + h / 2}" r="${Math.min(w, h) / 2 - 5}" fill="${fill}" stroke="${c}" stroke-width="${sw}"/>`);
+        if (radiusLabel) {
+          const baseX = shapeX + w / 2;
+          const baseY = shapeY + h / 2 - Math.min(w, h) / 2 - 10;
+          svgParts.push(`<text x="${baseX + radiusLabelOffsetX}" y="${baseY + radiusLabelOffsetY}" text-anchor="middle" font-size="12" fill="#000">${radiusLabel}</text>`);
+        }
         break;
       case 'square':
-        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${w}" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="${w-10}" height="${w-10}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        svgParts.push(`<rect x="${shapeX}" y="${shapeY}" width="${w}" height="${w}" fill="${fill}" stroke="${c}" stroke-width="${sw}"/>`);
         break;
       case 'rectangle':
-        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="5" width="${w-10}" height="${h-10}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        svgParts.push(`<rect x="${shapeX}" y="${shapeY}" width="${w}" height="${h}" fill="${fill}" stroke="${c}" stroke-width="${sw}"/>`);
         break;
       case 'triangle':
-        svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg"><polygon points="${w/2},5 ${w-5},${h-5} 5,${h-5}" fill="none" stroke="${c}" stroke-width="${sw}"/></svg>`)}`;
+        svgParts.push(`<polygon points="${shapeX + w / 2},${shapeY} ${shapeX + w},${shapeY + h} ${shapeX},${shapeY + h}" fill="${fill}" stroke="${c}" stroke-width="${sw}"/>`);
         break;
     }
+
+    // Add dimensions
+    dimensions.forEach((dim: any) => {
+      svgParts.push(renderDimension(dim));
+    });
+
+    // Add angle markers
+    angleMarkers.forEach((marker: any) => {
+      svgParts.push(renderAngleMarker(marker));
+    });
+
+    const svgContent = `data:image/svg+xml,${encodeURIComponent(`<svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">${svgParts.join('')}</svg>`)}`;
 
     if (svgContent) {
       editor.chain().focus().setImage({ src: svgContent }).run();
@@ -228,9 +392,9 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
             Tools
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-[600px] p-0">
-          <Tabs defaultValue="keyboard" className="w-full">
-            <TabsList className="w-full grid grid-cols-6">
+        <PopoverContent className="w-[600px] p-0 max-h-[80vh] flex flex-col">
+          <Tabs defaultValue="keyboard" className="w-full flex flex-col flex-1 min-h-0">
+            <TabsList className="w-full grid grid-cols-6 flex-shrink-0">
               <TabsTrigger value="keyboard" className="text-xs">
                 Keyboard
               </TabsTrigger>
@@ -251,51 +415,53 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="keyboard" className="p-4">
-              <ScientificKeyboard
-                onInsert={(symbol) => {
-                  editor.chain().focus().insertContent(symbol).run();
-                }}
-              />
-            </TabsContent>
+            <div className="flex-1 overflow-y-auto min-h-0">
+              <TabsContent value="keyboard" className="p-4">
+                <ScientificKeyboard
+                  onInsert={(symbol) => {
+                    editor.chain().focus().insertContent(symbol).run();
+                  }}
+                />
+              </TabsContent>
 
-            <TabsContent value="calculator" className="p-4">
-              <CalculatorWidget
-                onInsert={(value) => {
-                  editor.chain().focus().insertContent(value).run();
-                }}
-              />
-            </TabsContent>
+              <TabsContent value="calculator" className="p-4">
+                <CalculatorWidget
+                  onInsert={(value) => {
+                    editor.chain().focus().insertContent(value).run();
+                  }}
+                />
+              </TabsContent>
 
-            <TabsContent value="periodic" className="p-4">
-              <PeriodicTableSelector
-                onSelect={(element) => {
-                  editor.chain().focus().insertContent(element.symbol).run();
-                }}
-              />
-            </TabsContent>
+              <TabsContent value="periodic" className="p-4">
+                <PeriodicTableSelector
+                  onSelect={(element) => {
+                    editor.chain().focus().insertContent(element.symbol).run();
+                  }}
+                />
+              </TabsContent>
 
-            <TabsContent value="units" className="p-4">
-              <UnitConverter
-                onInsert={(value) => {
-                  editor.chain().focus().insertContent(value).run();
-                }}
-              />
-            </TabsContent>
+              <TabsContent value="units" className="p-4">
+                <UnitConverter
+                  onInsert={(value) => {
+                    editor.chain().focus().insertContent(value).run();
+                  }}
+                />
+              </TabsContent>
 
-            <TabsContent value="constants" className="p-4">
-              <ConstantsLibrary
-                onSelect={(constant) => {
-                  editor.chain().focus().insertContent(`${constant.symbol} = ${constant.value}`).run();
-                }}
-              />
-            </TabsContent>
+              <TabsContent value="constants" className="p-4">
+                <ConstantsLibrary
+                  onSelect={(constant) => {
+                    editor.chain().focus().insertContent(`${constant.symbol} = ${constant.value}`).run();
+                  }}
+                />
+              </TabsContent>
 
-            <TabsContent value="shapes" className="p-4">
-              <ShapeInserter
-                onInsert={insertShapeSVG}
-              />
-            </TabsContent>
+              <TabsContent value="shapes" className="p-4">
+                <ShapeInserter
+                  onInsert={insertShapeSVG}
+                />
+              </TabsContent>
+            </div>
           </Tabs>
         </PopoverContent>
       </Popover>

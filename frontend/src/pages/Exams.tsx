@@ -21,19 +21,40 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { format } from 'date-fns';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import { toast } from 'sonner';
 
 export default function Exams() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const courseId = searchParams.get('course');
+  const queryClient = useQueryClient();
 
   // Fetch exams - filter by course if courseId is provided
   const { data: exams, isLoading: examsLoading } = useQuery({
     queryKey: ['exams', courseId],
     queryFn: () => api.exams.getAll(courseId || undefined),
   });
+
+  const deleteExamMutation = useMutation({
+    mutationFn: (examId: string) => api.exams.delete(examId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      queryClient.invalidateQueries({ queryKey: ['submissions'] });
+      toast.success('Exam deleted');
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to delete exam');
+    },
+  });
+
+  const handleDeleteExam = (e: React.MouseEvent, examId: string, examTitle: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm(`Delete exam "${examTitle}"? This will also remove all submissions for this exam.`)) return;
+    deleteExamMutation.mutate(examId);
+  };
 
   // Fetch courses
   const { data: courses } = useQuery({
@@ -190,12 +211,18 @@ export default function Exams() {
                               View Details
                             </Link>
                           </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Exam
+                          <DropdownMenuItem asChild>
+                            <Link to={`/exams/${exam.id}/edit`}>
+                              <Edit className="h-4 w-4 mr-2" />
+                              Edit Exam
+                            </Link>
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive">
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={(e) => handleDeleteExam(e, exam.id, exam.title)}
+                            disabled={deleteExamMutation.isPending}
+                          >
                             <Trash2 className="h-4 w-4 mr-2" />
                             Delete Exam
                           </DropdownMenuItem>

@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { FileText, Eye, EyeOff, Users, CheckCircle, Clock, Plus, Loader2, Edit } from 'lucide-react';
+import { FileText, Eye, EyeOff, Users, CheckCircle, Clock, Plus, Loader2, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
@@ -51,6 +51,8 @@ export default function ProfessorExams() {
     exam: null,
     action: null
   });
+  const [deleteDialog, setDeleteDialog] = useState<{ isOpen: boolean; exam: Exam | null }>({ isOpen: false, exam: null });
+  const [deletingExamId, setDeletingExamId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -92,6 +94,21 @@ export default function ProfessorExams() {
     } finally {
       setPublishingExamId(null);
       setConfirmDialog({ isOpen: false, exam: null, action: null });
+    }
+  };
+
+  const handleDeleteExam = async () => {
+    if (!deleteDialog.exam) return;
+    try {
+      setDeletingExamId(deleteDialog.exam.id);
+      await examsAPI.delete(deleteDialog.exam.id);
+      toast.success('Exam deleted');
+      setDeleteDialog({ isOpen: false, exam: null });
+      await loadData();
+    } catch (error: any) {
+      toast.error((error as Error).message || 'Failed to delete exam');
+    } finally {
+      setDeletingExamId(null);
     }
   };
 
@@ -209,6 +226,15 @@ export default function ProfessorExams() {
           >
             <Edit className="h-4 w-4 mr-2" />
             Edit
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+            onClick={() => setDeleteDialog({ isOpen: true, exam })}
+            title="Delete exam"
+          >
+            <Trash2 className="h-4 w-4" />
           </Button>
           {exam.isPublished ? (
             <>
@@ -401,6 +427,29 @@ export default function ProfessorExams() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handlePublishToggle}>
               {confirmDialog.action === 'publish' ? 'Publish' : 'Unpublish'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Exam Dialog */}
+      <AlertDialog open={deleteDialog.isOpen} onOpenChange={(open) => !deletingExamId && setDeleteDialog({ isOpen: open, exam: open ? deleteDialog.exam : null })}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete exam?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{deleteDialog.exam?.title}</strong> and all its questions.
+              All submissions for this exam will also be removed. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!deletingExamId}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteExam}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={!!deletingExamId}
+            >
+              {deletingExamId ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

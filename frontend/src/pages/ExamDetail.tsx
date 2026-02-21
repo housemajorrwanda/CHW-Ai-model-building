@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { api } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -17,6 +17,7 @@ import {
   Image,
   Atom,
   Download,
+  Trash2,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
@@ -25,7 +26,27 @@ import { toast } from 'sonner';
 export default function ExamDetail() {
   const { examId } = useParams<{ examId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user } = useAuth();
+
+  const deleteExamMutation = useMutation({
+    mutationFn: (id: string) => api.exams.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      queryClient.invalidateQueries({ queryKey: ['submissions'] });
+      toast.success('Exam deleted');
+      navigate('/exams');
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to delete exam');
+    },
+  });
+
+  const handleDelete = () => {
+    if (!examId || !exam) return;
+    if (!window.confirm(`Delete "${exam.title}"? This will also remove all submissions for this exam.`)) return;
+    deleteExamMutation.mutate(examId);
+  };
 
   // Fetch exam details
   const { data: exam, isLoading } = useQuery({
@@ -91,7 +112,7 @@ export default function ExamDetail() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Attachments (images, graphs, shapes) */}
+          {/* Attachments (images extracted from PDF) */}
           {question.attachments && question.attachments.length > 0 && (
             <div className="space-y-3">
               <p className="text-sm font-semibold">Diagrams / Images</p>
@@ -99,8 +120,8 @@ export default function ExamDetail() {
                 {question.attachments.map((att: any) => {
                   const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
                   const origin = apiBase.replace(/\/api\/?$/, '');
-                  const src = `${origin}${att.filePath}`;
-                  if (att.attachmentType === 'image') {
+                  const src = att.filePath?.startsWith('http') ? att.filePath : `${origin}${att.filePath}`;
+                  if (att.attachmentType === 'image' || !att.attachmentType) {
                     return (
                       <img
                         key={att.id}
@@ -118,6 +139,25 @@ export default function ExamDetail() {
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* Sub-questions (a), (b), (c) */}
+          {question.subQuestions && question.subQuestions.length > 0 && level === 0 && (
+            <div className="space-y-3">
+              {question.subQuestions.map((sub: any, idx: number) => (
+                <div key={sub.id || idx} className="flex gap-3 pl-2 border-l-2 border-primary/30">
+                  <span className="font-semibold text-primary shrink-0 w-6 pt-0.5">
+                    ({String.fromCharCode(97 + idx)})
+                  </span>
+                  <div className="flex-1">
+                    <p className="text-sm">{sub.text || '(No text)'}</p>
+                    <span className="text-xs text-muted-foreground">
+                      [{sub.points} {sub.points === 1 ? 'mark' : 'marks'}]
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -284,9 +324,20 @@ export default function ExamDetail() {
               Download PDF
             </Button>
             {user?.role === 'professor' && (
-              <Button variant="outline" onClick={() => navigate(`/exams/new?examId=${examId}`)}>
-                Edit Exam
-              </Button>
+              <>
+                <Button variant="outline" onClick={() => navigate(`/exams/${examId}/edit`)}>
+                  Edit Exam
+                </Button>
+                <Button
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={handleDelete}
+                  disabled={deleteExamMutation.isPending}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Exam
+                </Button>
+              </>
             )}
           </div>
         </div>

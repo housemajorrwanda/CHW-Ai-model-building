@@ -23,6 +23,8 @@ pytesseract>=0.3.10
 # Image processing
 Pillow>=10.0.0
 pdf2image>=1.17.0
+pypdf>=4.0.0
+pdfplumber>=0.11.0
 opencv-python-headless>=4.10.0
 reportlab>=4.0.0
 

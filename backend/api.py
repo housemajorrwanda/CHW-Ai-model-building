@@ -14,6 +14,7 @@ from pathlib import Path
 import shutil
 from datetime import datetime, timedelta
 import jwt
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,242 @@ app.add_middleware(
 # Initialize OCR processor
 ocr_processor = OCRProcessor(language="en", dpi=300, psm=6, use_easyocr=False)
 
+
+def _is_pdf_text_readable(text: str) -> bool:
+    """Return True if extracted text looks usable (not empty or OCR garbage)."""
+    if not text or len(text.strip()) < 30:
+        return False
+    word_chars = sum(
+        1 for c in text
+        if c.isalnum() or c.isspace() or c in ".,;:!?'\"()-+=/^*[]"
+    )
+    symbol_soup = sum(1 for c in text if c in "|~}{\\<>_")
+    ratio = word_chars / max(len(text), 1)
+    if ratio < 0.25 or (symbol_soup / max(len(text), 1)) > 0.15:
+        return False
+    return True
+
+
+def _extract_text_from_pdf_bytes(file_content: bytes) -> Optional[str]:
+    """
+    Extract text from PDF so it follows the same structure as .txt (line-by-line).
+    Tries, in order: pdftotext (poppler), then pypdf. This gives layout-preserved
+    text that the exam parser can read like a plain text file.
+    """
+    # Marker injected between pages so the exam parser can track page numbers
+    _PAGE_BREAK = "<<PAGEBREAK>>"
+
+    # 1. Prefer pdftotext (poppler) - same engine as pdf2image, produces clean line-by-line text
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-", "-"],
+            input=file_content,
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode == 0 and result.stdout:
+            text = result.stdout.decode("utf-8", errors="replace")
+            # pdftotext separates pages with form-feed (\x0c) — replace with our marker
+            text = re.sub(r'\x0c', f'\n{_PAGE_BREAK}\n', text).strip()
+            if _is_pdf_text_readable(text):
+                logger.info("PDF text extracted with pdftotext (poppler)")
+                return text
+    except FileNotFoundError:
+        logger.debug("pdftotext not found (install poppler-utils, e.g. brew install poppler)")
+    except subprocess.TimeoutExpired:
+        logger.warning("pdftotext timed out")
+    except Exception as e:
+        logger.debug(f"pdftotext failed: {e}")
+
+    # 2. Fallback: pypdf (layout mode when available)
+    try:
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(file_content))
+        parts = []
+        for page_num, page in enumerate(reader.pages):
+            try:
+                t = page.extract_text(extraction_mode="layout")
+            except Exception:
+                t = page.extract_text()
+            if t and t.strip():
+                if page_num > 0:
+                    parts.append(_PAGE_BREAK)
+                parts.append(t.strip())
+        if not parts:
+            return None
+        text = "\n".join(parts).strip()
+        if not _is_pdf_text_readable(text):
+            return None
+        logger.info("PDF text extracted with pypdf")
+        return text
+    except Exception as e:
+        logger.debug(f"pypdf extraction failed: {e}")
+        return None
+
+
+
+def _extract_pdf_diagrams(pdf_bytes: bytes, questions: list) -> dict:
+    """
+    Extract diagrams from PDF pages for upload_exam.
+
+    Strategy (never attaches text/gold-solution content):
+    1. Use pdfplumber to detect embedded raster image objects and their bounding boxes.
+    2. Use pdfplumber to locate the "Gold Solution:" text on each page (y coordinate).
+    3. Render the page with pdf2image at 150 dpi.
+    4a. If embedded images exist on a page: crop each image bbox from the rendered page
+        (skipping any that are below the gold solution line).
+    4b. If NO embedded images (vector drawing): crop the entire rendered page above
+        the gold solution line (shows the diagram without the answer).
+
+    Returns {page_num: [{'data': bytes, 'name': str}, ...]}
+    """
+    import io
+    result: dict = {}
+
+    # Keywords in question text that indicate a visual element is present
+    _DIAGRAM_KW = {
+        'diagram', 'graph', 'figure', 'chart', 'plot', 'sketch',
+        'image', 'illustration', 'curve', 'draw', 'label', 'arrow',
+        'shown', 'below', 'apparatus', 'setup', 'experiment',
+    }
+
+    # Solution section markers (lower-case) used to find where answers start on the page
+    _SOL_MARKERS = [
+        'gold solution', 'model answer', 'expected answer',
+        'correct answer', 'answer key', 'solution:',
+    ]
+
+    pages_needed = {q.get('page_num', i) for i, q in enumerate(questions)}
+    if not pages_needed:
+        return result
+
+    # ── Step 1: Gather per-page info with pdfplumber ─────────────────────────
+    page_info: dict = {}  # page_num -> {images, gold_top, height, width}
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for pg_num, page in enumerate(pdf.pages):
+                if pg_num not in pages_needed:
+                    continue
+
+                info = {
+                    'images': [],
+                    'gold_top': None,
+                    'height': page.height,
+                    'width': page.width,
+                }
+
+                # Embedded raster image bounding boxes
+                for img in (page.images or []):
+                    x0 = img.get('x0', 0)
+                    top = img.get('top', 0)
+                    x1 = img.get('x1', page.width)
+                    bottom = img.get('bottom', page.height)
+                    w = x1 - x0
+                    h = bottom - top
+                    if w > 40 and h > 40:   # skip tiny decorative icons
+                        info['images'].append({'x0': x0, 'top': top, 'x1': x1, 'bottom': bottom})
+
+                # Find gold solution text y-position (pdfplumber coords: top from page top)
+                try:
+                    text_lower = (page.extract_text() or '').lower()
+                    for marker in _SOL_MARKERS:
+                        if marker in text_lower:
+                            # Find the word's top coordinate
+                            words = page.extract_words() or []
+                            for wi, word in enumerate(words):
+                                wl = word['text'].lower()
+                                if 'gold' == wl and wi + 1 < len(words) and 'solution' in words[wi + 1]['text'].lower():
+                                    info['gold_top'] = word['top']
+                                    break
+                                if wl.rstrip(':') in ('solution', 'answer') and wi > 0 and words[wi - 1]['text'].lower() in ('model', 'expected', 'correct', 'gold'):
+                                    info['gold_top'] = words[wi - 1]['top']
+                                    break
+                                if 'solution:' == wl:
+                                    info['gold_top'] = word['top']
+                                    break
+                            if info['gold_top'] is not None:
+                                break
+                except Exception:
+                    pass
+
+                page_info[pg_num] = info
+    except Exception as e:
+        logger.warning(f"pdfplumber diagram scan failed: {e}")
+        return result
+
+    # ── Step 2: Decide which pages need rendering ─────────────────────────────
+    pages_to_render: set = set()
+    for qi, q in enumerate(questions):
+        pg_num = q.get('page_num', qi)
+        info = page_info.get(pg_num)
+        if info is None:
+            continue
+        q_text = (q.get('text', '') + ' ' + ' '.join(
+            sq.get('text', '') for sq in q.get('sub_questions', [])
+        )).lower()
+        has_ref = any(kw in q_text for kw in _DIAGRAM_KW)
+        if info['images'] or (has_ref and info['gold_top'] is not None):
+            pages_to_render.add(pg_num)
+
+    if not pages_to_render:
+        return result
+
+    # ── Step 3: Render pages and crop ────────────────────────────────────────
+    try:
+        from pdf2image import convert_from_bytes
+        from PIL import Image as PILImage
+        dpi = 150
+        rendered = convert_from_bytes(pdf_bytes, dpi=dpi)
+
+        for pg_num in pages_to_render:
+            if pg_num >= len(rendered):
+                continue
+
+            info = page_info[pg_num]
+            page_img = rendered[pg_num]
+            pts_h = info['height'] or 792
+            pts_w = info['width'] or 612
+            sx = page_img.width / pts_w
+            sy = page_img.height / pts_h
+            gold_top = info.get('gold_top')
+
+            saved: list = []
+
+            if info['images']:
+                # Crop each detected image bbox (skip those below gold solution)
+                for img_idx, bbox in enumerate(info['images']):
+                    if gold_top is not None and bbox['top'] >= gold_top - 5:
+                        continue  # this image is in the answer section
+                    pad = 8
+                    px0 = max(0, int(bbox['x0'] * sx) - pad)
+                    ptop = max(0, int(bbox['top'] * sy) - pad)
+                    px1 = min(page_img.width, int(bbox['x1'] * sx) + pad)
+                    pbot = min(page_img.height, int(bbox['bottom'] * sy) + pad)
+                    if px1 - px0 > 40 and pbot - ptop > 40:
+                        cropped = page_img.crop((px0, ptop, px1, pbot))
+                        buf = io.BytesIO()
+                        cropped.convert("RGB").save(buf, format="PNG")
+                        saved.append({'data': buf.getvalue(), 'name': f'diagram_p{pg_num + 1}_{img_idx + 1}.png'})
+
+            else:
+                # Vector drawing case: crop the page above the gold solution line
+                if gold_top is not None:
+                    crop_px = max(60, int(gold_top * sy) - 12)
+                    cropped = page_img.crop((0, 0, page_img.width, crop_px))
+                    buf = io.BytesIO()
+                    cropped.convert("RGB").save(buf, format="PNG")
+                    saved.append({'data': buf.getvalue(), 'name': f'diagram_p{pg_num + 1}.png'})
+
+            if saved:
+                result[pg_num] = saved
+
+    except Exception as e:
+        logger.warning(f"PDF diagram render/crop failed: {e}")
+
+    return result
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -589,11 +826,21 @@ def get_exams(
                 for step in question.gold_steps
             ]
             
+            display_text = _display_safe_text(question.text)
+            rich_content_val = json.loads(question.rich_content) if question.rich_content and isinstance(question.rich_content, str) else (question.rich_content if question.rich_content else None)
+            if display_text.startswith("[Question text could not be displayed") and rich_content_val:
+                rich_content_val = {
+                    "type": "doc",
+                    "content": [{
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": "Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually."}]
+                    }]
+                }
             questions_data.append(
                 schemas.QuestionResponse(
                     id=question.id,
                     number=question.number,
-                    text=_display_safe_text(question.text),
+                    text=display_text,
                     points=question.points,
                     goldSolution=schemas.GoldSolutionResponse(
                         steps=gold_steps,
@@ -604,7 +851,7 @@ def get_exams(
                     finalAnswer=question.final_answer or "",
                     finalAnswerLatex=question.final_answer_latex or "",
                     questionType=getattr(question, 'question_type', 'standard'),
-                    richContent=question.rich_content,
+                    richContent=rich_content_val,
                     outlineLevel=getattr(question, 'outline_level', 1),
                     parentQuestionId=getattr(question, 'parent_question_id', None),
                     subQuestions=[],
@@ -656,6 +903,9 @@ def create_exam(
     db.add(new_exam)
     db.flush()  # Get exam ID
     
+    exam_attach_dir = UPLOAD_DIR / "exam_attachments" / new_exam.id
+    exam_attach_dir.mkdir(parents=True, exist_ok=True)
+    
     # Create questions and gold steps
     for question_data in exam_data.questions:
         new_question = models.Question(
@@ -664,10 +914,81 @@ def create_exam(
             text=question_data.text,
             points=question_data.points,
             final_answer=question_data.finalAnswer,
-            final_answer_latex=question_data.finalAnswerLatex
+            final_answer_latex=question_data.finalAnswerLatex,
+            question_type=question_data.questionType,
+            rich_content=json.dumps(question_data.richContent) if question_data.richContent else None,
+            outline_level=question_data.outlineLevel,
+            parent_question_id=question_data.parentQuestionId
         )
         db.add(new_question)
         db.flush()  # Get question ID
+        
+        # Handle attachments - move from temp location to question folder
+        for att_data in question_data.attachments:
+            # If attachment has an ID, it was uploaded via /api/attachments/upload
+            # Move it from temp to question folder
+            if att_data.filePath.startswith("/api/attachments/"):
+                att_id = att_data.filePath.split("/")[-2] if "/" in att_data.filePath else None
+                if att_id:
+                    temp_att = db.query(models.QuestionAttachment).filter(models.QuestionAttachment.id == att_id).first()
+                    if temp_att:
+                        # Move file from temp to question folder
+                        old_path = UPLOAD_DIR / temp_att.file_path
+                        if old_path.exists():
+                            safe_name = f"q{question_data.number}_{temp_att.filename}"
+                            new_path = exam_attach_dir / safe_name
+                            shutil.move(str(old_path), str(new_path))
+                            rel_path = f"exam_attachments/{new_exam.id}/{safe_name}"
+                            temp_att.question_id = new_question.id
+                            temp_att.file_path = rel_path
+                        else:
+                            # File doesn't exist, create new attachment record
+                            rel_path = f"exam_attachments/{new_exam.id}/q{question_data.number}_{att_data.filename}"
+                            new_att = models.QuestionAttachment(
+                                question_id=new_question.id,
+                                attachment_type=att_data.attachmentType,
+                                file_path=rel_path,
+                                filename=att_data.filename,
+                                file_size=att_data.fileSize,
+                                mime_type=att_data.mimeType
+                            )
+                            db.add(new_att)
+            else:
+                # Direct file path (from upload)
+                rel_path = f"exam_attachments/{new_exam.id}/q{question_data.number}_{att_data.filename}"
+                new_att = models.QuestionAttachment(
+                    question_id=new_question.id,
+                    attachment_type=att_data.attachmentType,
+                    file_path=rel_path,
+                    filename=att_data.filename,
+                    file_size=att_data.fileSize,
+                    mime_type=att_data.mimeType
+                )
+                db.add(new_att)
+        
+        # Handle embedded content (tables, shapes, graphs from TipTap)
+        if question_data.richContent:
+            # Extract tables, shapes, graphs from TipTap JSON
+            rich_json = question_data.richContent if isinstance(question_data.richContent, dict) else json.loads(question_data.richContent)
+            embedded_items = extract_embedded_content_from_tiptap(rich_json)
+            for emb_data in embedded_items:
+                new_emb = models.EmbeddedContent(
+                    question_id=new_question.id,
+                    content_type=emb_data['contentType'],
+                    content_data=json.dumps(emb_data['contentData']),
+                    position_data=json.dumps(emb_data['positionData']) if emb_data.get('positionData') else None
+                )
+                db.add(new_emb)
+        
+        # Also add explicit embedded_content from request
+        for emb_data in question_data.embeddedContent:
+            new_emb = models.EmbeddedContent(
+                question_id=new_question.id,
+                content_type=emb_data.contentType,
+                content_data=json.dumps(emb_data.contentData),
+                position_data=json.dumps(emb_data.positionData) if emb_data.positionData else None
+            )
+            db.add(new_emb)
         
         # Create gold solution steps
         for step_data in question_data.goldSolutionSteps:
@@ -681,12 +1002,42 @@ def create_exam(
                 required=step_data.required
             )
             db.add(new_step)
+        
+        # Handle sub-questions recursively
+        for sub_q_data in question_data.subQuestions:
+            sub_question = models.Question(
+                exam_id=new_exam.id,
+                number=sub_q_data.number,
+                text=sub_q_data.text,
+                points=sub_q_data.points,
+                final_answer=sub_q_data.finalAnswer,
+                final_answer_latex=sub_q_data.finalAnswerLatex,
+                question_type=sub_q_data.questionType,
+                rich_content=json.dumps(sub_q_data.richContent) if sub_q_data.richContent else None,
+                outline_level=sub_q_data.outlineLevel,
+                parent_question_id=new_question.id
+            )
+            db.add(sub_question)
+            db.flush()
+            
+            # Add gold steps for sub-question
+            for step_data in sub_q_data.goldSolutionSteps:
+                sub_step = models.GoldSolutionStep(
+                    question_id=sub_question.id,
+                    step_number=step_data.stepNumber,
+                    description=step_data.description,
+                    expression=step_data.expression,
+                    latex=step_data.latex,
+                    points=step_data.points,
+                    required=step_data.required
+                )
+                db.add(sub_step)
     
     db.commit()
     db.refresh(new_exam)
     
     # Return created exam
-    return get_exams(db=db, current_user=current_user)[0]  # Return first (newly created)
+    return get_exam(exam_id=new_exam.id, current_user=current_user, db=db)
 
 
 @app.post("/api/exams/upload")
@@ -704,37 +1055,46 @@ async def upload_exam(
     try:
         file_content = await file.read()
         file_ext = Path(file.filename).suffix.lower()
-        
-        page_images = []
+
+        # Diagrams/images extracted per PDF page (keyed by 0-based page number).
+        # Populated AFTER text parsing so we can use parsed question data.
+        pdf_embedded_images: dict = {}
+        _raw_pdf_bytes: Optional[bytes] = None  # saved for diagram extraction below
+
         if file_ext in ['.txt']:
             text = file_content.decode('utf-8')
         elif file_ext in ['.jpg', '.jpeg', '.png', '.pdf']:
             try:
-                ocr_result = ocr_processor.extract_steps_from_file(file_content, file.filename or "upload")
-                text = ocr_result.combined_text
-                try:
-                    from PIL import Image as PILImage
-                    import io
-                    if file_ext == '.pdf':
-                        from pdf2image import convert_from_bytes
-                        orig_pil = convert_from_bytes(file_content, dpi=150)
-                        page_images = []
-                        for pil_img in orig_pil:
-                            buf = io.BytesIO()
-                            pil_img.convert("RGB").save(buf, format="PNG")
-                            page_images.append(buf.getvalue())
-                    else:
-                        pil_img = PILImage.open(io.BytesIO(file_content)).convert("RGB")
-                        buf = io.BytesIO()
-                        pil_img.save(buf, format="PNG")
-                        page_images = [buf.getvalue()]
-                except Exception as e:
-                    logger.warning(f"Original page images failed, using OCR previews: {e}")
-                    page_images = getattr(ocr_result, "processed_previews", []) or []
+                text = ""
+                ocr_result = None
+                if file_ext == '.pdf':
+                    _raw_pdf_bytes = file_content
+                    # Prefer direct text extraction for text-based PDFs (no OCR)
+                    direct_text = _extract_text_from_pdf_bytes(file_content)
+                    if direct_text:
+                        text = direct_text
+                        logger.info("Using direct PDF text extraction (no OCR)")
+                    if not text:
+                        ocr_result = ocr_processor.extract_steps_from_file(file_content, file.filename or "upload")
+                        text = ocr_result.combined_text
+                else:
+                    ocr_result = ocr_processor.extract_steps_from_file(file_content, file.filename or "upload")
+                    text = ocr_result.combined_text
+                    # For a standalone image upload treat the image itself as an attachment
+                    try:
+                        import io as _io
+                        from PIL import Image as _PILImg
+                        _pil = _PILImg.open(_io.BytesIO(file_content)).convert("RGB")
+                        _buf = _io.BytesIO()
+                        _pil.save(_buf, format="PNG")
+                        pdf_embedded_images[0] = [{'data': _buf.getvalue(), 'name': 'question_image.png'}]
+                    except Exception:
+                        pass
+
                 if not text and file_ext == '.pdf':
                     raise HTTPException(
                         status_code=400,
-                        detail="PDF processing requires poppler. Install it (e.g. brew install poppler on macOS) or upload as .txt instead."
+                        detail="Could not extract text from PDF. For best results install poppler (e.g. brew install poppler on macOS). You can also upload the exam as a .txt file."
                     )
             except HTTPException:
                 raise
@@ -746,16 +1106,27 @@ async def upload_exam(
                 )
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Use .txt, .jpg, .png, or .pdf")
-        
+
         parser = ExamParser()
         parsed_exam = parser.parse_exam(text)
-        
+
+        # Extract diagrams from PDF using pdfplumber + pdf2image now that we
+        # know which questions are on which pages (and can find "Gold Solution:" positions)
+        if _raw_pdf_bytes and parsed_exam.get('questions') and not pdf_embedded_images:
+            try:
+                pdf_embedded_images = _extract_pdf_diagrams(_raw_pdf_bytes, parsed_exam['questions'])
+                logger.info(f"Diagram extraction: found images on {len(pdf_embedded_images)} page(s)")
+            except Exception as _de:
+                logger.warning(f"Diagram extraction failed: {_de}")
+
         if not parsed_exam['questions']:
             if text.strip() and file_ext in ['.jpg', '.jpeg', '.png', '.pdf']:
                 parsed_exam['questions'] = [{
                     'number': 1,
                     'text': text.strip()[:10000],
                     'points': 10,
+                    'page_num': 0,
+                    'sub_questions': [],
                     'gold_solution_steps': [{
                         'step_number': 1,
                         'description': 'Solution',
@@ -767,7 +1138,7 @@ async def upload_exam(
                 parsed_exam['total_points'] = 10
             else:
                 raise HTTPException(status_code=400, detail="No questions found in the uploaded file. Please check the format.")
-        
+
         new_exam = models.Exam(
             course_id=course_id,
             title=_display_safe_text(parsed_exam['title']),
@@ -777,40 +1148,52 @@ async def upload_exam(
         )
         db.add(new_exam)
         db.flush()
-        
+
         exam_attach_dir = UPLOAD_DIR / "exam_attachments" / new_exam.id
         exam_attach_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for q_idx, question_data in enumerate(parsed_exam['questions']):
             new_question = models.Question(
                 exam_id=new_exam.id,
                 number=question_data['number'],
-                text=_display_safe_text(question_data.get('text') or ''),
-                points=question_data['points']
+                text=_normalize_text_for_storage(question_data.get('text') or ''),
+                points=question_data['points'],
+                outline_level=1,
+                parent_question_id=None,
             )
             db.add(new_question)
             db.flush()
-            
-            if page_images:
-                img_idx = min(q_idx, len(page_images) - 1)
-                try:
-                    png_bytes = page_images[img_idx]
-                    safe_name = f"q{question_data['number']}_page.png"
-                    out_path = exam_attach_dir / safe_name
-                    with open(out_path, "wb") as f:
-                        f.write(png_bytes)
-                    rel_path = f"exam_attachments/{new_exam.id}/{safe_name}"
-                    att = models.QuestionAttachment(
-                        question_id=new_question.id,
-                        attachment_type="image",
-                        file_path=rel_path,
-                        filename=safe_name,
-                        mime_type="image/png",
-                    )
-                    db.add(att)
-                except Exception as e:
-                    logger.warning(f"Could not save page image for question: {e}")
-            
+
+            # Attach diagram images that belong to this question's page
+            q_page_num = question_data.get('page_num', q_idx)
+            if q_page_num in pdf_embedded_images:
+                import io as _io
+                from PIL import Image as _PILImg
+                for img_idx, img_info in enumerate(pdf_embedded_images[q_page_num]):
+                    try:
+                        raw_data = img_info['data']
+                        # Normalise to PNG via PIL so we always serve a valid image
+                        pil_img = _PILImg.open(_io.BytesIO(raw_data)).convert("RGB")
+                        out_buf = _io.BytesIO()
+                        pil_img.save(out_buf, format="PNG")
+                        png_bytes = out_buf.getvalue()
+
+                        safe_name = f"q{question_data['number']}_diagram{img_idx + 1}.png"
+                        out_path = exam_attach_dir / safe_name
+                        with open(out_path, "wb") as _f:
+                            _f.write(png_bytes)
+                        rel_path = f"exam_attachments/{new_exam.id}/{safe_name}"
+                        att = models.QuestionAttachment(
+                            question_id=new_question.id,
+                            attachment_type="image",
+                            file_path=rel_path,
+                            filename=safe_name,
+                            mime_type="image/png",
+                        )
+                        db.add(att)
+                    except Exception as _e:
+                        logger.warning(f"Could not save diagram for Q{question_data['number']}: {_e}")
+
             for step_data in question_data['gold_solution_steps']:
                 new_step = models.GoldSolutionStep(
                     question_id=new_question.id,
@@ -821,10 +1204,33 @@ async def upload_exam(
                     required=step_data['required']
                 )
                 db.add(new_step)
-        
+
+            # Create sub-questions (a), (b), (c) if parsed
+            for sub_idx, sub_data in enumerate(question_data.get('sub_questions') or [], start=1):
+                sub_q = models.Question(
+                    exam_id=new_exam.id,
+                    number=sub_idx,
+                    text=_normalize_text_for_storage(sub_data.get('text') or ''),
+                    points=sub_data.get('points', 1),
+                    outline_level=2,
+                    parent_question_id=new_question.id,
+                )
+                db.add(sub_q)
+                db.flush()
+                for step_data in sub_data.get('gold_solution_steps') or []:
+                    new_step = models.GoldSolutionStep(
+                        question_id=sub_q.id,
+                        step_number=step_data['step_number'],
+                        description=step_data['description'],
+                        expression=step_data['expression'],
+                        points=step_data['points'],
+                        required=step_data['required'],
+                    )
+                    db.add(new_step)
+
         db.commit()
         db.refresh(new_exam)
-        
+
         return {
             "message": "Exam uploaded and parsed successfully",
             "exam_id": new_exam.id,
@@ -841,6 +1247,68 @@ async def upload_exam(
 
 
 security_optional = HTTPBearer(auto_error=False)
+
+
+@app.post("/api/attachments/upload")
+async def upload_attachment(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Upload an attachment file (image, etc.) and return attachment info. Can be linked to questions later."""
+    if current_user.role != models.UserRole.PROFESSOR:
+        raise HTTPException(status_code=403, detail="Only professors can upload attachments")
+    
+    try:
+        file_content = await file.read()
+        file_ext = Path(file.filename or "file").suffix.lower()
+        
+        # Determine attachment type and mime type
+        if file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']:
+            attachment_type = "image"
+            mime_type = f"image/{file_ext[1:]}" if file_ext != '.jpg' else "image/jpeg"
+        elif file_ext == '.pdf':
+            attachment_type = "document"
+            mime_type = "application/pdf"
+        else:
+            attachment_type = "document"
+            mime_type = "application/octet-stream"
+        
+        # Save file to temporary location (will be moved when question is created)
+        temp_dir = UPLOAD_DIR / "temp_attachments"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        safe_filename = f"{current_user.id}_{datetime.utcnow().timestamp()}_{file.filename or 'file'}"
+        safe_filename = "".join(c for c in safe_filename if c.isalnum() or c in "._-")
+        temp_path = temp_dir / safe_filename
+        
+        with open(temp_path, "wb") as f:
+            f.write(file_content)
+        
+        rel_path = f"temp_attachments/{safe_filename}"
+        
+        # Create attachment record (question_id will be set later)
+        new_attachment = models.QuestionAttachment(
+            question_id="",  # Will be set when question is created
+            attachment_type=attachment_type,
+            file_path=rel_path,
+            filename=file.filename or "file",
+            file_size=len(file_content),
+            mime_type=mime_type,
+        )
+        db.add(new_attachment)
+        db.flush()
+        db.refresh(new_attachment)
+        
+        return schemas.AttachmentResponse(
+            id=new_attachment.id,
+            attachmentType=new_attachment.attachment_type,
+            filePath=f"/api/attachments/{new_attachment.id}/file",
+            filename=new_attachment.filename,
+            mimeType=new_attachment.mime_type,
+        )
+    except Exception as e:
+        logger.error(f"Error uploading attachment: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload attachment: {str(e)}")
 
 
 @app.get("/api/attachments/{attachment_id}/file")
@@ -861,6 +1329,9 @@ def serve_attachment(
         except Exception:
             pass
     if not allowed:
+        # For temp attachments (no question_id), allow if user uploaded it
+        if not att.question_id:
+            raise HTTPException(status_code=403, detail="Access denied")
         question = db.query(models.Question).filter(models.Question.id == att.question_id).first()
         if not question:
             raise HTTPException(status_code=404, detail="Not found")
@@ -883,6 +1354,7 @@ def get_exam(
     """Get a specific exam by ID"""
     exam = db.query(models.Exam).options(
         selectinload(models.Exam.questions).options(
+            selectinload(models.Question.gold_steps),
             selectinload(models.Question.attachments),
             selectinload(models.Question.embedded_content),
         )
@@ -890,8 +1362,16 @@ def get_exam(
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
-    questions_data = []
-    for question in exam.questions:
+    # Build question tree: only top-level questions in list, with subQuestions nested
+    all_questions = list(exam.questions)
+    top_level = [q for q in all_questions if not getattr(q, 'parent_question_id', None)]
+    children_by_parent = {}
+    for q in all_questions:
+        pid = getattr(q, 'parent_question_id', None)
+        if pid:
+            children_by_parent.setdefault(pid, []).append(q)
+
+    def _question_to_response(question, sub_responses=None):
         gold_steps = [
             schemas.GoldSolutionStepResponse(
                 stepNumber=step.step_number,
@@ -916,7 +1396,6 @@ def get_exam(
         embedded_data = []
         for ec in question.embedded_content:
             try:
-                import json
                 content_data = json.loads(ec.content_data) if isinstance(ec.content_data, str) else (ec.content_data or {})
                 position_data = json.loads(ec.position_data) if isinstance(ec.position_data, str) and ec.position_data else None
             except Exception:
@@ -930,31 +1409,44 @@ def get_exam(
                     positionData=position_data,
                 )
             )
-        
-        questions_data.append(
-            schemas.QuestionResponse(
-                id=question.id,
-                number=question.number,
-                text=_display_safe_text(question.text),
-                points=question.points,
-                goldSolution=schemas.GoldSolutionResponse(
-                    steps=gold_steps,
-                    finalAnswer=question.final_answer or "",
-                    finalAnswerLatex=question.final_answer_latex or ""
-                ),
-                goldSolutionSteps=gold_steps,
+        display_text = _display_safe_text(question.text)
+        rich_content_val = json.loads(question.rich_content) if question.rich_content and isinstance(question.rich_content, str) else (question.rich_content if question.rich_content else None)
+        if display_text.startswith("[Question text could not be displayed") and rich_content_val:
+            rich_content_val = {
+                "type": "doc",
+                "content": [{
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually."}]
+                }]
+            }
+        return schemas.QuestionResponse(
+            id=question.id,
+            number=question.number,
+            text=display_text,
+            points=question.points,
+            goldSolution=schemas.GoldSolutionResponse(
+                steps=gold_steps,
                 finalAnswer=question.final_answer or "",
-                finalAnswerLatex=question.final_answer_latex or "",
-                questionType=getattr(question, 'question_type', 'standard'),
-                richContent=question.rich_content,
-                outlineLevel=getattr(question, 'outline_level', 1),
-                parentQuestionId=getattr(question, 'parent_question_id', None),
-                subQuestions=[],
-                attachments=attachments_data,
-                embeddedContent=embedded_data,
-                theories=[]
-            )
+                finalAnswerLatex=question.final_answer_latex or ""
+            ),
+            goldSolutionSteps=gold_steps,
+            finalAnswer=question.final_answer or "",
+            finalAnswerLatex=question.final_answer_latex or "",
+            questionType=getattr(question, 'question_type', 'standard'),
+            richContent=rich_content_val,
+            outlineLevel=getattr(question, 'outline_level', 1),
+            parentQuestionId=getattr(question, 'parent_question_id', None),
+            subQuestions=sub_responses or [],
+            attachments=attachments_data,
+            embeddedContent=embedded_data,
+            theories=[]
         )
+
+    questions_data = []
+    for question in sorted(top_level, key=lambda q: q.number):
+        children = sorted(children_by_parent.get(question.id, []), key=lambda q: q.number)
+        sub_responses = [_question_to_response(c) for c in children]
+        questions_data.append(_question_to_response(question, sub_responses))
     
     return schemas.ExamResponse(
         id=exam.id,
@@ -968,6 +1460,32 @@ def get_exam(
         publishedAt=exam.published_at,
         createdAt=exam.created_at
     )
+
+
+@app.delete("/api/exams/{exam_id}")
+def delete_exam(
+    exam_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an exam (professor only). Removes exam, questions, and submissions for that exam."""
+    exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    if current_user.role != models.UserRole.PROFESSOR:
+        raise HTTPException(status_code=403, detail="Only professors can delete exams")
+    # Delete submissions first (they reference exam_id)
+    db.query(models.Submission).filter(models.Submission.exam_id == exam_id).delete()
+    db.delete(exam)
+    db.commit()
+    # Remove attachment folder if present
+    exam_attach_dir = UPLOAD_DIR / "exam_attachments" / exam_id
+    if exam_attach_dir.exists():
+        try:
+            shutil.rmtree(exam_attach_dir)
+        except OSError as e:
+            logger.warning(f"Could not remove exam attachment dir {exam_attach_dir}: {e}")
+    return {"deleted": True}
 
 
 @app.put("/api/exams/{exam_id}", response_model=schemas.ExamResponse)
@@ -996,10 +1514,13 @@ def update_exam(
     total_points = sum(q.points for q in exam_data.questions)
     exam.total_points = total_points
     
-    # Delete existing questions (cascade will delete gold steps)
+    # Delete existing questions (cascade will delete gold steps, attachments, embedded_content)
     for question in exam.questions:
         db.delete(question)
     db.flush()
+    
+    exam_attach_dir = UPLOAD_DIR / "exam_attachments" / exam.id
+    exam_attach_dir.mkdir(parents=True, exist_ok=True)
     
     # Create new questions and gold steps
     for question_data in exam_data.questions:
@@ -1011,12 +1532,73 @@ def update_exam(
             final_answer=question_data.finalAnswer,
             final_answer_latex=question_data.finalAnswerLatex,
             question_type=question_data.questionType,
-            rich_content=str(question_data.richContent) if question_data.richContent else None,
+            rich_content=json.dumps(question_data.richContent) if question_data.richContent else None,
             outline_level=question_data.outlineLevel,
             parent_question_id=question_data.parentQuestionId
         )
         db.add(new_question)
         db.flush()
+        
+        # Handle attachments - move from temp location to question folder
+        for att_data in question_data.attachments:
+            if att_data.filePath.startswith("/api/attachments/"):
+                att_id = att_data.filePath.split("/")[-2] if "/" in att_data.filePath else None
+                if att_id:
+                    temp_att = db.query(models.QuestionAttachment).filter(models.QuestionAttachment.id == att_id).first()
+                    if temp_att:
+                        old_path = UPLOAD_DIR / temp_att.file_path
+                        if old_path.exists():
+                            safe_name = f"q{question_data.number}_{temp_att.filename}"
+                            new_path = exam_attach_dir / safe_name
+                            shutil.move(str(old_path), str(new_path))
+                            rel_path = f"exam_attachments/{exam.id}/{safe_name}"
+                            temp_att.question_id = new_question.id
+                            temp_att.file_path = rel_path
+                        else:
+                            rel_path = f"exam_attachments/{exam.id}/q{question_data.number}_{att_data.filename}"
+                            new_att = models.QuestionAttachment(
+                                question_id=new_question.id,
+                                attachment_type=att_data.attachmentType,
+                                file_path=rel_path,
+                                filename=att_data.filename,
+                                file_size=att_data.fileSize,
+                                mime_type=att_data.mimeType
+                            )
+                            db.add(new_att)
+            else:
+                rel_path = f"exam_attachments/{exam.id}/q{question_data.number}_{att_data.filename}"
+                new_att = models.QuestionAttachment(
+                    question_id=new_question.id,
+                    attachment_type=att_data.attachmentType,
+                    file_path=rel_path,
+                    filename=att_data.filename,
+                    file_size=att_data.fileSize,
+                    mime_type=att_data.mimeType
+                )
+                db.add(new_att)
+        
+        # Handle embedded content (tables, shapes, graphs from TipTap)
+        if question_data.richContent:
+            rich_json = question_data.richContent if isinstance(question_data.richContent, dict) else json.loads(question_data.richContent)
+            embedded_items = extract_embedded_content_from_tiptap(rich_json)
+            for emb_data in embedded_items:
+                new_emb = models.EmbeddedContent(
+                    question_id=new_question.id,
+                    content_type=emb_data['contentType'],
+                    content_data=json.dumps(emb_data['contentData']),
+                    position_data=json.dumps(emb_data['positionData']) if emb_data.get('positionData') else None
+                )
+                db.add(new_emb)
+        
+        # Also add explicit embedded_content from request
+        for emb_data in question_data.embeddedContent:
+            new_emb = models.EmbeddedContent(
+                question_id=new_question.id,
+                content_type=emb_data.contentType,
+                content_data=json.dumps(emb_data.contentData),
+                position_data=json.dumps(emb_data.positionData) if emb_data.positionData else None
+            )
+            db.add(new_emb)
         
         # Create gold solution steps
         for step_data in question_data.goldSolutionSteps:
@@ -1030,6 +1612,35 @@ def update_exam(
                 required=step_data.required
             )
             db.add(new_step)
+        
+        # Handle sub-questions
+        for sub_q_data in question_data.subQuestions:
+            sub_question = models.Question(
+                exam_id=exam.id,
+                number=sub_q_data.number,
+                text=sub_q_data.text,
+                points=sub_q_data.points,
+                final_answer=sub_q_data.finalAnswer,
+                final_answer_latex=sub_q_data.finalAnswerLatex,
+                question_type=sub_q_data.questionType,
+                rich_content=json.dumps(sub_q_data.richContent) if sub_q_data.richContent else None,
+                outline_level=sub_q_data.outlineLevel,
+                parent_question_id=new_question.id
+            )
+            db.add(sub_question)
+            db.flush()
+            
+            for step_data in sub_q_data.goldSolutionSteps:
+                sub_step = models.GoldSolutionStep(
+                    question_id=sub_question.id,
+                    step_number=step_data.stepNumber,
+                    description=step_data.description,
+                    expression=step_data.expression,
+                    latex=step_data.latex,
+                    points=step_data.points,
+                    required=step_data.required
+                )
+                db.add(sub_step)
     
     db.commit()
     db.refresh(exam)
@@ -1087,6 +1698,67 @@ def unpublish_exam(
 # Submission Endpoints (Next part will continue...)
 # ============================================================================
 
+
+
+def extract_embedded_content_from_tiptap(tiptap_json: dict) -> List[dict]:
+    """Extract tables, shapes, graphs from TipTap JSON and convert to EmbeddedContent format."""
+    embedded_items = []
+    
+    def traverse(node: dict):
+        if not isinstance(node, dict):
+            return
+        
+        node_type = node.get('type', '')
+        
+        # Extract tables
+        if node_type == 'table':
+            rows = []
+            for child in node.get('content', []):
+                if child.get('type') == 'tableRow':
+                    row = []
+                    for cell in child.get('content', []):
+                        cell_text = ''
+                        if cell.get('type') == 'tableCell' or cell.get('type') == 'tableHeader':
+                            for para in cell.get('content', []):
+                                if para.get('type') == 'paragraph':
+                                    for text_node in para.get('content', []):
+                                        if text_node.get('type') == 'text':
+                                            cell_text += text_node.get('text', '')
+                        row.append(cell_text)
+                    if row:
+                        rows.append(row)
+            
+            if rows:
+                embedded_items.append({
+                    'contentType': 'table',
+                    'contentData': {'rows': rows},
+                    'positionData': None
+                })
+        
+        # Extract images (shapes/graphs embedded as SVG data URLs)
+        elif node_type == 'image':
+            src = node.get('attrs', {}).get('src', '')
+            if src.startswith('data:image/svg+xml'):
+                # This is a shape
+                embedded_items.append({
+                    'contentType': 'shape',
+                    'contentData': {'src': src, 'alt': node.get('attrs', {}).get('alt', '')},
+                    'positionData': None
+                })
+        
+        # Recursively traverse children
+        if 'content' in node:
+            for child in node['content']:
+                traverse(child)
+    
+    if isinstance(tiptap_json, dict):
+        if 'content' in tiptap_json:
+            for child in tiptap_json['content']:
+                traverse(child)
+        else:
+            traverse(tiptap_json)
+    
+    return embedded_items
 
 
 def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
@@ -2294,9 +2966,26 @@ def _pdf_safe_text(s) -> str:
         ratio = word_chars / len(result)
         # Replace if: low word ratio, or high density of symbol-soup characters
         if ratio < 0.40 or (symbol_soup / len(result)) > 0.12:
-            return "[Question text could not be displayed]"
+            return "[Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually.]"
     return result
 
+
+def _normalize_text_for_storage(s) -> str:
+    """Normalize encoding for storing in DB. Does NOT replace content with placeholder (use only when saving)."""
+    if s is None:
+        return ""
+    if isinstance(s, bytes):
+        try:
+            s = s.decode("utf-8")
+        except UnicodeDecodeError:
+            s = s.decode("utf-8", errors="replace")
+    if not isinstance(s, str) or not s:
+        return ""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s)
+    # Remove null bytes and other control chars
+    s = "".join(c for c in s if c != "\x00" and (ord(c) >= 32 or c in "\n\r\t"))
+    return s
 
 def _display_safe_text(s) -> str:
     """Clean text for display (fix encoding/garble). Same as _pdf_safe_text but no HTML escape."""
@@ -2339,7 +3028,22 @@ def _display_safe_text(s) -> str:
             out.append("1/2")
         else:
             out.append(" ")
-    return "".join(out)
+    result = "".join(out)
+    # If text looks like encoding garbage (symbol soup), don't show it
+    if result and len(result) > 25:
+        word_chars = sum(1 for c in result if c.isalnum() or c in " .,;:?!'-/")
+        symbol_soup = sum(1 for c in result if c in "|~=}{\\<>_-+")
+        ratio = word_chars / len(result)
+        # Don't hide content that clearly looks like exam text (has "Question" and "Solution"/"Gold"/numbers)
+        sample = result[:600].lower()
+        looks_like_exam = (
+            "question" in sample and ("solution" in sample or "gold" in sample or "answer" in sample)
+        ) or ("question" in sample and any(c.isdigit() for c in sample))
+        if looks_like_exam and ratio >= 0.25 and (symbol_soup / len(result)) <= 0.20:
+            return result
+        if ratio < 0.40 or (symbol_soup / len(result)) > 0.12:
+            return "[Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually.]"
+    return result
 
 
 @app.get("/api/exams/{exam_id}/download")

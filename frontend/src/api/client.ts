@@ -208,6 +208,10 @@ export const examsAPI = {
       body: JSON.stringify(examData),
     });
   },
+
+  async delete(examId: string) {
+    return apiCall(`/exams/${examId}`, { method: 'DELETE' });
+  },
 };
 
 // ============================================================================
