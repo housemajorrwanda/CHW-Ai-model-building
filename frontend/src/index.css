@@ -394,6 +394,24 @@
   outline: none;
 }
 
+/* TipTap Mathematics extension */
+.tiptap-mathematics-editor,
+.tiptap-mathematics-render {
+  cursor: pointer;
+}
+.tiptap-mathematics-render {
+  padding: 0.1em 0.2em;
+  border-radius: 0.25em;
+  transition: background 0.15s;
+}
+.tiptap-mathematics-render:hover {
+  background: hsl(var(--accent));
+}
+.ProseMirror .math-node {
+  display: inline-block;
+  cursor: default;
+}
+
 /* TipTap placeholder */
 .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);

@@ -265,18 +265,33 @@ export const submissionsAPI = {
     return apiCall(`/submissions/${submissionId}`);
   },
 
-  async submit(examId: string, images: File[], answers?: any[]) {
+  async submit(
+    examId: string,
+    imageEntries: { questionId: string; file: File }[],
+    answers?: any[],
+    fullAnswerPdf?: File | null,
+  ) {
     const formData = new FormData();
     formData.append('exam_id', examId);
-    
-    // Add typed answers if provided
+
     if (answers) {
       formData.append('answers', JSON.stringify(answers));
     }
-    
-    images.forEach((image) => {
-      formData.append('images', image);
+
+    // Encode the question ID into the filename so the backend can route each
+    // image to the correct question: "q_{questionId}_{index}.ext"
+    imageEntries.forEach(({ questionId, file }, idx) => {
+      const ext = file.name.includes('.')
+        ? '.' + file.name.split('.').pop()!.toLowerCase()
+        : '.jpg';
+      const encodedName = `q_${questionId}_${idx}${ext}`;
+      formData.append('images', file, encodedName);
     });
+
+    // Full-exam answer PDF (page N = answer to question N)
+    if (fullAnswerPdf) {
+      formData.append('answer_pdf', fullAnswerPdf, fullAnswerPdf.name);
+    }
 
     return apiCall('/submissions', {
       method: 'POST',

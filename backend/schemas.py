@@ -238,7 +238,10 @@ class SubQuestionCreate(BaseModel):
     goldSolutionSteps: List[GoldSolutionStepCreate]
     finalAnswer: str
     finalAnswerLatex: str = ""
+    questionType: str = "standard"
     richContent: Optional[dict] = None
+    outlineLevel: int = 2
+    subQuestions: List['SubQuestionCreate'] = []
 
 
 class QuestionCreate(BaseModel):

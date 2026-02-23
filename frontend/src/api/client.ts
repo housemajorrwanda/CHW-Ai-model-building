@@ -212,6 +212,14 @@ export const examsAPI = {
   async delete(examId: string) {
     return apiCall(`/exams/${examId}`, { method: 'DELETE' });
   },
+
+  async publish(examId: string) {
+    return apiCall(`/exams/${examId}/publish`, { method: 'POST' });
+  },
+
+  async unpublish(examId: string) {
+    return apiCall(`/exams/${examId}/unpublish`, { method: 'POST' });
+  },
 };
 
 // ============================================================================

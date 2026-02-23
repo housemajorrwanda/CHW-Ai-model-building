@@ -18,6 +18,8 @@ import {
   Atom,
   Download,
   Trash2,
+  Globe,
+  GlobeLock,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
@@ -39,6 +41,30 @@ export default function ExamDetail() {
     },
     onError: (err: Error) => {
       toast.error(err.message || 'Failed to delete exam');
+    },
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: (id: string) => api.exams.publish(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['exam', examId] });
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      toast.success('Exam published — students can now see it');
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to publish exam');
+    },
+  });
+
+  const unpublishMutation = useMutation({
+    mutationFn: (id: string) => api.exams.unpublish(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['exam', examId] });
+      queryClient.invalidateQueries({ queryKey: ['exams'] });
+      toast.success('Exam unpublished');
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to unpublish exam');
     },
   });
 
@@ -254,9 +280,20 @@ export default function ExamDetail() {
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div>
-              <div className="flex items-center gap-3 mb-2">
+              <div className="flex items-center gap-3 mb-2 flex-wrap">
                 <h1 className="text-3xl font-bold tracking-tight">{exam.title}</h1>
                 <Badge variant="secondary">{course?.code}</Badge>
+                {exam.isPublished ? (
+                  <Badge className="bg-green-100 text-green-800 border-green-200">
+                    <Globe className="h-3 w-3 mr-1" />
+                    Published
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    <GlobeLock className="h-3 w-3 mr-1" />
+                    Draft
+                  </Badge>
+                )}
               </div>
               {exam.description && (
                 <p className="text-muted-foreground">{exam.description}</p>
@@ -325,6 +362,24 @@ export default function ExamDetail() {
             </Button>
             {user?.role === 'professor' && (
               <>
+                {exam.isPublished ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => unpublishMutation.mutate(examId!)}
+                    disabled={unpublishMutation.isPending}
+                  >
+                    <GlobeLock className="h-4 w-4 mr-2" />
+                    {unpublishMutation.isPending ? 'Unpublishing...' : 'Unpublish'}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => publishMutation.mutate(examId!)}
+                    disabled={publishMutation.isPending}
+                  >
+                    <Globe className="h-4 w-4 mr-2" />
+                    {publishMutation.isPending ? 'Publishing...' : 'Publish Exam'}
+                  </Button>
+                )}
                 <Button variant="outline" onClick={() => navigate(`/exams/${examId}/edit`)}>
                   Edit Exam
                 </Button>

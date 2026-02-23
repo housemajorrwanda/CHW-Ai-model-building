@@ -11,6 +11,12 @@ import re
 from sympy import sympify, simplify, Symbol, symbols, Eq, parse_expr
 from sympy.parsing.sympy_parser import parse_expr as parse_expr_safe
 
+try:
+    from grading.science_synonyms import synonym_match_score as _syn_score
+    _SCIENCE_SYNONYMS_AVAILABLE = True
+except ImportError:
+    _SCIENCE_SYNONYMS_AVAILABLE = False
+
 
 class StepStatus(Enum):
     """Status of a step evaluation"""
@@ -236,7 +242,13 @@ class MathGrader:
         # 1.5. Normalized exact match
         if student_normalized == gold_normalized:
             return (1.0, "normalized exact match")
-        
+
+        # 1.6. Science synonym match (CO2 ↔ carbon dioxide, ATP ↔ adenosine triphosphate, etc.)
+        if _SCIENCE_SYNONYMS_AVAILABLE:
+            syn_score = _syn_score(student_clean, gold_clean)
+            if syn_score >= 0.85:
+                return (syn_score, "science synonym match")
+
         # 2. Try mathematical equivalence (using normalized versions)
         math_score = self._check_mathematical_equivalence(student_normalized, gold_normalized)
         if math_score > 0:

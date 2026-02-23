@@ -2,6 +2,8 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Superscript } from '@tiptap/extension-superscript';
 import { Subscript } from '@tiptap/extension-subscript';
+import { Mathematics } from '@tiptap/extension-mathematics';
+import 'katex/dist/katex.min.css';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { 
@@ -29,6 +31,7 @@ interface AnswerEditorProps {
   questionPoints: number;
   answer: string;
   onUpdate: (answer: string) => void;
+  placeholder?: string;
 }
 
 export function AnswerEditor({ 
@@ -36,7 +39,8 @@ export function AnswerEditor({
   questionText, 
   questionPoints, 
   answer, 
-  onUpdate 
+  onUpdate,
+  placeholder = 'Type your answer here...',
 }: AnswerEditorProps) {
   const [showKeyboard, setShowKeyboard] = useState(false);
   
@@ -49,8 +53,9 @@ export function AnswerEditor({
       }),
       Superscript,
       Subscript,
+      Mathematics,
       Placeholder.configure({
-        placeholder: 'Type your answer here...',
+        placeholder,
       }),
     ],
     content: answer || '',

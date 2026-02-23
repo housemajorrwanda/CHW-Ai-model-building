@@ -828,14 +828,7 @@ def get_exams(
             
             display_text = _display_safe_text(question.text)
             rich_content_val = json.loads(question.rich_content) if question.rich_content and isinstance(question.rich_content, str) else (question.rich_content if question.rich_content else None)
-            if display_text.startswith("[Question text could not be displayed") and rich_content_val:
-                rich_content_val = {
-                    "type": "doc",
-                    "content": [{
-                        "type": "paragraph",
-                        "content": [{"type": "text", "text": "Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually."}]
-                    }]
-                }
+            # Never replace real richContent with the placeholder — the frontend renders it properly
             questions_data.append(
                 schemas.QuestionResponse(
                     id=question.id,
@@ -1411,14 +1404,7 @@ def get_exam(
             )
         display_text = _display_safe_text(question.text)
         rich_content_val = json.loads(question.rich_content) if question.rich_content and isinstance(question.rich_content, str) else (question.rich_content if question.rich_content else None)
-        if display_text.startswith("[Question text could not be displayed") and rich_content_val:
-            rich_content_val = {
-                "type": "doc",
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{"type": "text", "text": "Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually."}]
-                }]
-            }
+        # Never replace real richContent with the placeholder — the frontend renders it properly
         return schemas.QuestionResponse(
             id=question.id,
             number=question.number,
@@ -1933,6 +1919,9 @@ async def grade_submission_automatically(submission_id: str, db: Session):
         db.commit()
         return
     
+    # Track which question IDs have already been graded (to avoid duplicates)
+    graded_question_ids: set = set()
+
     # Process typed answers with proper mathematical evaluation
     if has_typed_answers:
         try:
@@ -2012,7 +2001,10 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                 )
                 db.add(db_grading_result)
                 db.flush()
-                
+
+                # Mark this question as graded so we don't double-count via images
+                graded_question_ids.add(question.id)
+
                 # Store step results
                 for idx, (student_step, evaluation) in enumerate(
                     zip(student_steps, grading_result['evaluations']), start=1
@@ -2041,97 +2033,128 @@ async def grade_submission_automatically(submission_id: str, db: Session):
             print(f"Error grading typed answers: {e}")
             import traceback
             traceback.print_exc()
-    
-    # Process images with OCR and MathGrader
+
+    # ── Process image uploads with OCR ────────────────────────────────────────
     if has_images:
         for image_record in submission.images:
             try:
                 image_path = Path(image_record.image_path)
                 if not image_path.exists():
                     continue
-                
-                # Run OCR to extract steps
+
+                # ── Recover which question this image belongs to ──────────────
+                # Filename format written by the frontend: q_{questionId}_{idx}.ext
+                question = None
+                stem = image_path.stem  # e.g. "q_abc-123_0"
+                if stem.startswith('q_'):
+                    parts = stem.split('_', 2)  # ['q', questionId, idx]
+                    if len(parts) >= 2:
+                        candidate_qid = parts[1]
+                        question = next(
+                            (q for q in questions if q.id == candidate_qid), None
+                        )
+
+                # Fallback: match by 1-based page number
+                if question is None:
+                    pg = image_record.page_number
+                    if 1 <= pg <= len(questions):
+                        question = questions[pg - 1]
+                    else:
+                        question = questions[0] if questions else None
+
+                if not question:
+                    continue
+
+                # ── Skip if this question already has a typed-answer grade ────
+                if question.id in graded_question_ids:
+                    logger.info(
+                        f"Skipping image for Q{question.number} — already graded via typed answer"
+                    )
+                    continue
+
+                # ── Run OCR ──────────────────────────────────────────────────
                 with open(image_path, "rb") as f:
                     image_bytes = f.read()
-                
+
                 ocr_result = ocr_processor.extract_steps_from_file(
                     image_bytes,
                     image_path.name
                 )
-                
+
                 student_steps = ocr_result.steps
-                
                 if not student_steps:
+                    logger.warning(f"OCR returned no steps for {image_path.name}")
                     continue
-                
-                # Determine which question this image corresponds to
-                # Assuming one question per image based on page number
-                question = None
-                if image_record.page_number <= len(questions):
-                    question = questions[image_record.page_number - 1]
-                else:
-                    # Try to find question by matching content or use first question
-                    question = questions[0] if questions else None
-                
-                if not question:
-                    continue
-                
-                # Get gold solution steps
-                gold_steps = [
-                    GraderStep(
-                        content=step.expression or step.latex or '',
-                        points=float(step.points),
-                        required=step.required
+
+                # ── Grade ─────────────────────────────────────────────────────
+                gold_steps = []
+                for step in question.gold_steps:
+                    content = (
+                        step.latex if step.latex and step.latex.strip()
+                        else (step.expression or '')
                     )
-                    for step in question.gold_steps
-                ]
-                
+                    if content.strip():
+                        gold_steps.append(GraderStep(
+                            content=content.strip(),
+                            points=float(step.points),
+                            required=step.required
+                        ))
+
                 if not gold_steps:
                     continue
-                
+
                 grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
-                
-                # Store grading result
+
+                logger.info(
+                    f"OCR grading Q{question.number}: "
+                    f"{grading_result['total_score']}/{grading_result['max_score']} "
+                    f"({grading_result['percentage']:.1f}%)"
+                )
+
+                # ── Store result ──────────────────────────────────────────────
                 db_grading_result = models.GradingResult(
                     submission_id=submission.id,
                     question_id=question.id,
-                    extracted_text="\n".join(student_steps),
+                    extracted_text=ocr_result.combined_text or "\n".join(student_steps),
                     extracted_latex=None,
                     score=grading_result['total_score'],
                     max_score=grading_result['max_score'],
-                    feedback=f"Auto-graded (OCR): {grading_result['percentage']:.1f}%",
+                    feedback=f"Auto-graded (handwriting): {grading_result['percentage']:.1f}%",
                     is_correct=grading_result['percentage'] >= 70
                 )
                 db.add(db_grading_result)
                 db.flush()
-                
-                # Store step results
+
+                graded_question_ids.add(question.id)
+
                 for idx, (student_step, evaluation) in enumerate(
                     zip(student_steps, grading_result['evaluations']), start=1
                 ):
                     matched_gold = None
                     if evaluation.matched_gold_step is not None:
-                        matched_gold_step_obj = gold_steps[evaluation.matched_gold_step]
-                        matched_gold = matched_gold_step_obj.content
-                    
+                        matched_gold = gold_steps[evaluation.matched_gold_step].content
+
                     step_result = models.StepResult(
                         grading_result_id=db_grading_result.id,
                         step_number=idx,
                         student_text=student_step,
                         is_correct=evaluation.status.value == "Correct",
                         score=evaluation.points_earned,
-                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
+                        max_score=(
+                            gold_steps[evaluation.matched_gold_step].points
+                            if evaluation.matched_gold_step is not None else 0
+                        ),
                         feedback=evaluation.feedback,
                         expected=matched_gold,
                         received=student_step
                     )
                     db.add(step_result)
-                
+
                 total_score += grading_result['total_score']
-                
+
             except Exception as e:
-                print(f"Error grading image: {e}")
+                print(f"Error grading image {image_record.image_path}: {e}")
                 import traceback
                 traceback.print_exc()
     
@@ -2146,48 +2169,138 @@ async def submit_exam(
     exam_id: str = Form(...),
     images: List[UploadFile] = File(default=[]),
     answers: Optional[str] = Form(None),
+    answer_pdf: Optional[UploadFile] = File(default=None),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Submit an exam with optional image uploads and/or typed answers"""
-    # Verify exam exists
+    """Submit an exam with optional image uploads, typed answers, or a full-exam answer PDF."""
     exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
-    
-    # Validate that at least one submission method is provided
-    if not images and not answers:
-        raise HTTPException(status_code=400, detail="At least one submission method (images or typed answers) is required")
-    
-    # Create submission
+
+    if not images and not answers and not answer_pdf:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one submission method (typed answers, images, or answer PDF) is required"
+        )
+
+    # ── Process full-exam answer PDF ─────────────────────────────────────────
+    # If the student uploaded a single PDF covering all questions, extract text
+    # from each page and turn it into typed answers (page N → question N).
+    # For scanned/handwritten pages we save them as per-question image files.
+    extra_typed_answers: list = []      # [{questionId, questionNumber, typedAnswer}]
+    extra_image_records: list = []      # [{filename, bytes}]  for scanned pages
+
+    if answer_pdf and answer_pdf.filename:
+        try:
+            pdf_bytes = await answer_pdf.read()
+            pdf_pages = ocr_processor.extract_pdf_text_pages(pdf_bytes)
+            questions_ordered = sorted(exam.questions, key=lambda q: q.number)
+
+            for page_idx, question in enumerate(questions_ordered):
+                page_text = pdf_pages[page_idx] if page_idx < len(pdf_pages) else ''
+
+                if ocr_processor._text_is_clean(page_text):
+                    # Typed page → store as a typed answer (perfect accuracy)
+                    extra_typed_answers.append({
+                        'questionId': question.id,
+                        'questionNumber': question.number,
+                        'typedAnswer': page_text,
+                    })
+                else:
+                    # Scanned/handwritten page → save as an image file for OCR
+                    # Render this page as a PNG via pdf2image
+                    try:
+                        from pdf2image import convert_from_bytes as _c2b
+                        import io as _io
+                        # Re-read just this page (slice trick via pypdf)
+                        from pypdf import PdfReader as _PR, PdfWriter as _PW
+                        reader = _PR(_io.BytesIO(pdf_bytes))
+                        if page_idx < len(reader.pages):
+                            writer = _PW()
+                            writer.add_page(reader.pages[page_idx])
+                            page_buf = _io.BytesIO()
+                            writer.write(page_buf)
+                            page_buf.seek(0)
+                            imgs = _c2b(page_buf.read(), dpi=200)
+                            if imgs:
+                                img_buf = _io.BytesIO()
+                                imgs[0].save(img_buf, format='PNG')
+                                safe_name = f"q_{question.id}_pdf{page_idx}.png"
+                                extra_image_records.append({
+                                    'filename': safe_name,
+                                    'data': img_buf.getvalue(),
+                                })
+                    except Exception as _pe:
+                        logger.warning(f"Could not render PDF page {page_idx}: {_pe}")
+
+        except Exception as e:
+            logger.warning(f"Failed to process answer PDF: {e}")
+
+    # ── Merge typed answers ───────────────────────────────────────────────────
+    merged_answers = extra_typed_answers[:]
+    if answers:
+        try:
+            import json as _json
+            existing = _json.loads(answers)
+            # Existing typed answers take precedence (student typed them manually)
+            existing_qids = {a.get('questionId') for a in existing}
+            for ea in extra_typed_answers:
+                if ea['questionId'] not in existing_qids:
+                    existing.append(ea)
+            merged_answers = existing
+        except Exception:
+            merged_answers = extra_typed_answers
+
+    merged_answers_json = None
+    if merged_answers:
+        import json as _json
+        merged_answers_json = _json.dumps(merged_answers)
+    elif answers:
+        merged_answers_json = answers
+
+    # ── Create submission record ──────────────────────────────────────────────
     new_submission = models.Submission(
         exam_id=exam_id,
         student_id=current_user.id,
         status=models.SubmissionStatus.PENDING,
         max_score=exam.total_points,
-        typed_answers=answers  # Store JSON string of typed answers
+        typed_answers=merged_answers_json
     )
     db.add(new_submission)
     db.flush()
-    
-    # Save uploaded images if provided
-    if images:
-        submission_dir = UPLOAD_DIR / new_submission.id
+
+    submission_dir = UPLOAD_DIR / new_submission.id
+
+    # ── Save per-question image uploads ──────────────────────────────────────
+    if images or extra_image_records:
         submission_dir.mkdir(exist_ok=True)
-        
+
         for idx, image_file in enumerate(images, start=1):
-            # Save image
-            file_ext = Path(image_file.filename).suffix
-            image_path = submission_dir / f"page_{idx}{file_ext}"
-            
+            original_name = image_file.filename or f"page_{idx}.jpg"
+            safe_name = Path(original_name).name or f"page_{idx}.jpg"
+            image_path = submission_dir / safe_name
+
             with open(image_path, "wb") as buffer:
                 shutil.copyfileobj(image_file.file, buffer)
-            
-            # Create image record
+
             submission_image = models.SubmissionImage(
                 submission_id=new_submission.id,
                 image_path=str(image_path),
                 page_number=idx
+            )
+            db.add(submission_image)
+
+        # Save any scanned pages extracted from the answer PDF
+        for rec in extra_image_records:
+            submission_dir.mkdir(exist_ok=True)
+            image_path = submission_dir / rec['filename']
+            with open(image_path, "wb") as f:
+                f.write(rec['data'])
+            submission_image = models.SubmissionImage(
+                submission_id=new_submission.id,
+                image_path=str(image_path),
+                page_number=len(images) + extra_image_records.index(rec) + 1
             )
             db.add(submission_image)
     
@@ -2750,9 +2863,13 @@ async def approve_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     
-    if submission.status != models.SubmissionStatus.AWAITING_APPROVAL:
-        raise HTTPException(status_code=400, detail="Submission is not awaiting approval")
-    
+    approvable = {
+        models.SubmissionStatus.AWAITING_APPROVAL,
+        models.SubmissionStatus.GRADED,
+    }
+    if submission.status not in approvable:
+        raise HTTPException(status_code=400, detail="Submission cannot be approved in its current state")
+
     submission.status = models.SubmissionStatus.APPROVED
     submission.approved_at = datetime.utcnow()
     submission.approved_by = current_user.id
@@ -2780,18 +2897,25 @@ async def reject_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     
-    if submission.status != models.SubmissionStatus.AWAITING_APPROVAL:
-        raise HTTPException(status_code=400, detail="Submission is not awaiting approval")
-    
+    rejectable = {
+        models.SubmissionStatus.AWAITING_APPROVAL,
+        models.SubmissionStatus.GRADED,
+        models.SubmissionStatus.APPROVED,
+    }
+    if submission.status not in rejectable:
+        raise HTTPException(status_code=400, detail="Submission cannot be rejected in its current state")
+
     submission.status = models.SubmissionStatus.PENDING
     submission.total_score = None
     submission.graded_at = None
-    
+    submission.approved_at = None
+    submission.approved_by = None
+
     for grading_result in submission.grading_results:
         db.delete(grading_result)
-    
+
     db.commit()
-    
+
     return {
         "status": "success",
         "message": "Submission rejected. Student can resubmit."
@@ -2913,6 +3037,56 @@ def root():
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
+
+
+def _extract_text_from_rich_content(rich_content) -> str:
+    """
+    Recursively extract plain text from TipTap JSON (richContent).
+    Handles text nodes, math nodes (blockMath / inlineMath), paragraphs, lists, etc.
+    Returns a human-readable string suitable for PDF output.
+    """
+    if not rich_content:
+        return ""
+    if isinstance(rich_content, str):
+        try:
+            import json as _json
+            rich_content = _json.loads(rich_content)
+        except Exception:
+            return rich_content
+
+    _PLACEHOLDER = "[Question text could not be displayed"
+
+    def _node_text(node) -> str:
+        if not isinstance(node, dict):
+            return ""
+        ntype = node.get("type", "")
+        # Plain text leaf — skip injected placeholder messages
+        if ntype == "text":
+            t = node.get("text", "")
+            if t.startswith(_PLACEHOLDER):
+                return ""
+            return t
+        # Math nodes — show latex in brackets so it's human-readable in PDF
+        if ntype in ("blockMath", "mathBlock"):
+            latex = node.get("attrs", {}).get("latex", "")
+            return f"\n[{latex}]\n" if latex else ""
+        if ntype in ("inlineMath", "mathInline"):
+            latex = node.get("attrs", {}).get("latex", "")
+            return f"[{latex}]" if latex else ""
+        # Recurse into children
+        parts = []
+        children = node.get("content") or []
+        for child in children:
+            parts.append(_node_text(child))
+        text = "".join(parts)
+        # Add line breaks after block-level nodes
+        if ntype in ("paragraph", "heading", "listItem", "blockquote"):
+            text = text + "\n"
+        if ntype in ("bulletList", "orderedList"):
+            text = text + "\n"
+        return text
+
+    return _node_text(rich_content).strip()
 
 
 def _pdf_safe_text(s) -> str:
@@ -3136,10 +3310,25 @@ async def download_exam_pdf(
     else:
         for question in sorted(exam.questions, key=lambda q: q.number):
             story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
-            
-            question_text = question.text or ""
+
+            rich = getattr(question, "rich_content", None)
+            if rich:
+                try:
+                    import json as _json
+                    rc = _json.loads(rich) if isinstance(rich, str) else rich
+                    question_text = _extract_text_from_rich_content(rc)
+                except Exception:
+                    question_text = question.text or ""
+            else:
+                question_text = question.text or ""
+
             if question_text:
-                story.append(Paragraph(_pdf_safe_text(question_text), normal_style))
+                for line in question_text.split("\n"):
+                    line = line.strip()
+                    # Skip injected placeholder lines
+                    if line and not line.startswith("[Question text could not be displayed"):
+                        story.append(Paragraph(_pdf_safe_text(line), normal_style))
+
             for att in getattr(question, "attachments", []) or []:
                 if getattr(att, "attachment_type", "") != "image":
                     continue

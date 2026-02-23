@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, AlertCircle, Filter, X } from 'lucide-react';
+import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, AlertCircle, Filter, X, Edit2, ThumbsDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
@@ -114,35 +114,29 @@ export default function ProfessorSubmissions() {
     return true;
   });
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return 'default';
-      case 'graded':
-      case 'awaiting_approval':
-        return 'secondary';
-      case 'grading':
-        return 'secondary';
-      case 'pending':
-        return 'secondary';
-      default:
-        return 'outline';
-    }
+  const STATUS_STYLE: Record<string, string> = {
+    approved:          'bg-emerald-50 text-emerald-700 border-emerald-200',
+    graded:            'bg-blue-50 text-blue-700 border-blue-200',
+    awaiting_approval: 'bg-amber-50 text-amber-700 border-amber-200',
+    grading:           'bg-purple-50 text-purple-700 border-purple-200',
+    pending:           'bg-yellow-50 text-yellow-700 border-yellow-200',
+  };
+
+  const STATUS_LABEL: Record<string, string> = {
+    approved:          'Approved',
+    graded:            'AI Graded',
+    awaiting_approval: 'Awaiting Approval',
+    grading:           'Grading…',
+    pending:           'Pending',
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'approved':
-      case 'graded':
-        return <CheckCircle className="h-4 w-4 text-green-600" />;
-      case 'awaiting_approval':
-        return <Clock className="h-4 w-4 text-orange-600" />;
-      case 'grading':
-        return <Loader2 className="h-4 w-4 animate-spin text-yellow-600" />;
-      case 'pending':
-        return <Clock className="h-4 w-4 text-yellow-600" />;
-      default:
-        return <AlertCircle className="h-4 w-4" />;
+      case 'approved':        return <CheckCircle className="h-3.5 w-3.5" />;
+      case 'graded':          return <CheckCircle className="h-3.5 w-3.5" />;
+      case 'awaiting_approval': return <Clock className="h-3.5 w-3.5" />;
+      case 'grading':         return <Loader2 className="h-3.5 w-3.5 animate-spin" />;
+      default:                return <Clock className="h-3.5 w-3.5" />;
     }
   };
 
@@ -154,9 +148,11 @@ export default function ProfessorSubmissions() {
       .toUpperCase();
   };
 
-  const pendingCount = filteredSubmissions.filter(s => s.status === 'pending').length;
-  const gradingCount = filteredSubmissions.filter(s => s.status === 'grading').length;
-  const gradedCount = filteredSubmissions.filter(s => s.status === 'graded').length;
+  const pendingCount        = filteredSubmissions.filter(s => s.status === 'pending').length;
+  const gradingCount        = filteredSubmissions.filter(s => s.status === 'grading').length;
+  const gradedCount         = filteredSubmissions.filter(s => s.status === 'graded').length;
+  const awaitingCount       = filteredSubmissions.filter(s => s.status === 'awaiting_approval').length;
+  const approvedCount       = filteredSubmissions.filter(s => s.status === 'approved').length;
 
   if (isLoading) {
     return (
@@ -177,12 +173,10 @@ export default function ProfessorSubmissions() {
         </div>
 
         {/* Stats */}
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-5">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Submissions
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{filteredSubmissions.length}</div>
@@ -190,9 +184,7 @@ export default function ProfessorSubmissions() {
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Pending Review
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Pending</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-yellow-600">{pendingCount}</div>
@@ -200,22 +192,26 @@ export default function ProfessorSubmissions() {
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Grading
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">AI Graded</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-blue-600">{gradingCount}</div>
+              <div className="text-2xl font-bold text-blue-600">{gradedCount}</div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Graded
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Awaiting Approval</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">{gradedCount}</div>
+              <div className="text-2xl font-bold text-amber-600">{awaitingCount}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Approved</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-emerald-600">{approvedCount}</div>
             </CardContent>
           </Card>
         </div>
@@ -253,7 +249,9 @@ export default function ProfessorSubmissions() {
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="grading">Grading</SelectItem>
-                  <SelectItem value="graded">Graded</SelectItem>
+                  <SelectItem value="graded">AI Graded</SelectItem>
+                  <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -312,13 +310,16 @@ export default function ProfessorSubmissions() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={getStatusColor(submission.status) as any} className="flex items-center gap-1 w-fit">
+                          <Badge
+                            variant="outline"
+                            className={`flex items-center gap-1 w-fit text-xs ${STATUS_STYLE[submission.status] ?? ''}`}
+                          >
                             {getStatusIcon(submission.status)}
-                            {submission.status}
+                            {STATUS_LABEL[submission.status] ?? submission.status}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {submission.status === 'graded' && submission.totalScore !== null ? (
+                          {submission.totalScore !== null && submission.totalScore !== undefined ? (
                             <span className="font-medium">
                               {submission.totalScore.toFixed(1)} / {submission.maxScore}
                               <span className="text-xs text-muted-foreground ml-1">
@@ -336,29 +337,11 @@ export default function ProfessorSubmissions() {
                               variant="outline"
                               onClick={() => navigate(`/submissions/${submission.id}`)}
                             >
-                              <Eye className="h-4 w-4 mr-2" />
+                              <Eye className="h-4 w-4 mr-1.5" />
                               View
                             </Button>
-                            {submission.status === 'awaiting_approval' && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleApprove(submission.id)}
-                                  className="bg-green-600 hover:bg-green-700"
-                                >
-                                  <CheckCircle className="h-4 w-4 mr-2" />
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => handleReject(submission.id)}
-                                >
-                                  <X className="h-4 w-4 mr-2" />
-                                  Reject
-                                </Button>
-                              </>
-                            )}
+
+                            {/* Grade with AI — pending only */}
                             {submission.status === 'pending' && (
                               <Button
                                 size="sm"
@@ -366,16 +349,47 @@ export default function ProfessorSubmissions() {
                                 disabled={isGrading}
                               >
                                 {isGrading ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                    Grading...
-                                  </>
+                                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
                                 ) : (
-                                  <>
-                                    <Sparkles className="h-4 w-4 mr-2" />
-                                    Grade with AI
-                                  </>
+                                  <Sparkles className="h-4 w-4 mr-1.5" />
                                 )}
+                                {isGrading ? 'Grading…' : 'Grade with AI'}
+                              </Button>
+                            )}
+
+                            {/* Edit Grades — graded or awaiting_approval */}
+                            {(submission.status === 'graded' || submission.status === 'awaiting_approval') && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => navigate(`/submissions/${submission.id}`)}
+                              >
+                                <Edit2 className="h-4 w-4 mr-1.5" />
+                                Edit Grades
+                              </Button>
+                            )}
+
+                            {/* Approve — graded or awaiting_approval */}
+                            {(submission.status === 'graded' || submission.status === 'awaiting_approval') && (
+                              <Button
+                                size="sm"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                onClick={() => handleApprove(submission.id)}
+                              >
+                                <CheckCircle className="h-4 w-4 mr-1.5" />
+                                Approve
+                              </Button>
+                            )}
+
+                            {/* Reject — graded, awaiting_approval, or approved */}
+                            {['graded', 'awaiting_approval', 'approved'].includes(submission.status) && (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleReject(submission.id)}
+                              >
+                                <ThumbsDown className="h-4 w-4 mr-1.5" />
+                                Reject
                               </Button>
                             )}
                           </div>

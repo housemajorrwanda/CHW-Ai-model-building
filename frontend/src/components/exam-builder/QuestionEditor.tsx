@@ -7,7 +7,8 @@ import { TableHeader } from '@tiptap/extension-table-header';
 import { Image } from '@tiptap/extension-image';
 import { ShapeExtension } from './extensions/ShapeExtension';
 import { GraphExtension } from './extensions/GraphExtension';
-import { FormulaExtension } from './extensions/FormulaExtension';
+import { Mathematics, migrateMathStrings } from '@tiptap/extension-mathematics';
+import 'katex/dist/katex.min.css';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -65,7 +66,7 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       }),
       ShapeExtension,
       GraphExtension,
-      FormulaExtension,
+      Mathematics,
       Placeholder.configure({
         placeholder: 'Enter your question here...',
       }),
@@ -84,6 +85,10 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       },
     },
     immediatelyRender: false,
+    onCreate: ({ editor }) => {
+      // Convert any raw $$...$$ / $...$ strings to proper math nodes on load
+      migrateMathStrings(editor);
+    },
   });
 
   // Update editor content when question changes
@@ -103,6 +108,9 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       } else {
         editor.commands.setContent('', { emitUpdate: false });
       }
+
+      // Convert any raw $$...$$ / $...$ text to proper math nodes
+      migrateMathStrings(editor);
       
       if (editorRef.current) {
         editorRef.current.setAttribute('data-question-id', questionId);

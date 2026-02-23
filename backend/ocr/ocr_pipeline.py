@@ -49,8 +49,78 @@ class OCRProcessor:
                 print(f"EasyOCR initialization failed: {e}")
                 self.use_easyocr = False
 
+    # ── Direct PDF text extraction (no OCR needed for typed PDFs) ────────────
+
+    @staticmethod
+    def extract_pdf_text_pages(pdf_bytes: bytes) -> List[str]:
+        """
+        Try to extract text directly from a PDF using pypdf.
+        Returns one string per page.  If a page has no selectable text (scanned),
+        the string for that page is empty.
+        """
+        try:
+            import io as _io
+            from pypdf import PdfReader
+            reader = PdfReader(_io.BytesIO(pdf_bytes))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text() or ''
+                # Normalise whitespace
+                text = '\n'.join(
+                    line.strip() for line in text.splitlines() if line.strip()
+                )
+                pages.append(text)
+            return pages
+        except Exception:
+            return []
+
+    @staticmethod
+    def _text_is_clean(text: str) -> bool:
+        """
+        Return True if the extracted text looks like real readable content
+        (not garbled OCR noise or just whitespace).
+        """
+        if not text or len(text.strip()) < 15:
+            return False
+        # Ratio of printable ASCII to total chars should be high
+        printable = sum(1 for c in text if c.isprintable() or c in '\n\t')
+        return (printable / len(text)) > 0.85
+
+    # ── Main entry point ──────────────────────────────────────────────────────
+
     def extract_steps_from_file(self, file_bytes: bytes, filename: str) -> OCRResult:
-        """High-level helper for any supported document type."""
+        """
+        Extract answer steps from an image or PDF file.
+
+        For PDFs: tries direct text extraction first (perfect for typed answers).
+        Falls back to image-based OCR when the PDF is scanned / handwritten.
+        """
+        lower = filename.lower()
+
+        # ── Fast path: typed PDF ─────────────────────────────────────────────
+        if lower.endswith('.pdf'):
+            pdf_pages = self.extract_pdf_text_pages(file_bytes)
+            # If every page produced clean text, skip OCR entirely
+            clean_pages = [p for p in pdf_pages if self._text_is_clean(p)]
+            if clean_pages and len(clean_pages) == max(len(pdf_pages), 1):
+                all_text = '\n\n'.join(clean_pages)
+                steps = []
+                for page_text in clean_pages:
+                    steps.extend(self._segment_steps(page_text))
+                steps = [s for s in (s.strip() for s in steps) if s]
+                return OCRResult(
+                    combined_text=all_text,
+                    steps=steps,
+                    page_count=len(clean_pages),
+                    processed_previews=[],   # no images to show
+                )
+            # Partial or zero extraction → fall through to OCR below,
+            # but seed the text with whatever was extracted.
+            pre_extracted = pdf_pages  # list of str, may be empty per page
+        else:
+            pre_extracted = []
+
+        # ── OCR path (images + scanned PDFs) ─────────────────────────────────
         images = self._load_pages(file_bytes, filename)
         if not images:
             return OCRResult("", [], 0, [])
@@ -59,16 +129,24 @@ class OCRProcessor:
         extracted_steps: List[str] = []
         previews: List[bytes] = []
 
-        for image in images:
-            processed = self._preprocess_image(image)
-            previews.append(self._pil_to_png_bytes(processed))
-            
-            # Try EasyOCR first if available (better for handwriting and rotation)
-            if self.use_easyocr:
-                text = self._run_easyocr(processed)
+        for page_idx, image in enumerate(images):
+            # If we already have clean direct text for this page, use it
+            direct = pre_extracted[page_idx] if page_idx < len(pre_extracted) else ''
+            if self._text_is_clean(direct):
+                text = direct
+                previews.append(self._pil_to_png_bytes(self._light_preprocess(image)))
+            elif self.use_easyocr:
+                light = self._light_preprocess(image)
+                previews.append(self._pil_to_png_bytes(light))
+                text = self._run_easyocr(light)
+                if len(text.strip()) < 4:
+                    heavy = self._heavy_preprocess(image)
+                    text = self._run_ocr(heavy)
             else:
-                text = self._run_ocr(processed)
-            
+                heavy = self._heavy_preprocess(image)
+                previews.append(self._pil_to_png_bytes(heavy))
+                text = self._run_ocr(heavy)
+
             combined_text.append(text.strip())
             extracted_steps.extend(self._segment_steps(text))
 
@@ -92,131 +170,101 @@ class OCRProcessor:
         except Exception:
             return []
 
-    def _preprocess_image(self, image: Image.Image) -> Image.Image:
-        """Enhance the image to improve OCR results."""
-        grayscale = ImageOps.grayscale(image)
-        grayscale = ImageOps.autocontrast(grayscale)
+    # ── Shared normalisation ──────────────────────────────────────────────────
 
-        # Upscale low-resolution images for better OCR accuracy
+    def _base_normalise(self, image: Image.Image) -> np.ndarray:
+        """
+        Shared first step: grayscale → upscale → fix inversion.
+        Returns an uint8 numpy array (no binarisation yet).
+        """
+        gray = ImageOps.grayscale(image)
+
+        # Upscale images that are too small for reliable OCR
         min_width = 1200
-        if grayscale.width < min_width:
-            scale = min_width / grayscale.width
-            grayscale = grayscale.resize(
-                (int(grayscale.width * scale), int(grayscale.height * scale)),
+        if gray.width < min_width:
+            scale = min_width / gray.width
+            gray = gray.resize(
+                (int(gray.width * scale), int(gray.height * scale)),
                 Image.Resampling.LANCZOS,
             )
 
-        np_img = np.array(grayscale)
+        np_img = np.array(gray, dtype=np.uint8)
 
-        # Check and fix inversion FIRST (before any processing)
-        # If image is mostly dark (inverted), flip it
-        mean_brightness = np.mean(np_img)
-        if mean_brightness < 128:  # More dark than light = likely inverted
+        # Fix dark-on-light inversion (e.g. photos of whiteboards or dark paper)
+        if np.mean(np_img) < 110:
             np_img = 255 - np_img
 
-        # Auto-rotate image to correct orientation (0, 90, 180, 270 degrees)
-        np_img = self._auto_orient_image(np_img)
+        return np_img
 
-        # Enhance contrast first (CLAHE - Contrast Limited Adaptive Histogram Equalization)
+    # ── Light preprocessing (for EasyOCR) ────────────────────────────────────
+
+    def _light_preprocess(self, image: Image.Image) -> Image.Image:
+        """
+        Minimal preprocessing that preserves natural texture for EasyOCR.
+        EasyOCR's neural network reads natural photos better than binary images.
+        """
+        np_img = self._base_normalise(image)
+
+        # Mild denoising — keep strokes intact
+        np_img = cv2.fastNlMeansDenoising(np_img, None, h=7,
+                                           templateWindowSize=7,
+                                           searchWindowSize=21)
+
+        # Gentle CLAHE to even out lighting (phone photos taken at an angle)
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        np_img = clahe.apply(np_img)
+
+        # Return as RGB so EasyOCR can use colour channels if needed
+        pil = Image.fromarray(np_img, mode='L').convert('RGB')
+        return pil
+
+    # ── Heavy preprocessing (for Tesseract) ──────────────────────────────────
+
+    def _heavy_preprocess(self, image: Image.Image) -> Image.Image:
+        """
+        Full binarisation pipeline for Tesseract.
+        Goal: crisp black text on white background.
+        """
+        np_img = self._base_normalise(image)
+
+        # CLAHE for local contrast
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         np_img = clahe.apply(np_img)
 
-        # Denoise while preserving edges (lighter denoising for handwriting)
-        np_img = cv2.fastNlMeansDenoising(
-            np_img, None, h=10, templateWindowSize=7, searchWindowSize=21
-        )
+        # Denoising
+        np_img = cv2.fastNlMeansDenoising(np_img, None, h=10,
+                                           templateWindowSize=7,
+                                           searchWindowSize=21)
 
-        # Deskew image to correct tilted writing
+        # Gentle deskew (≤ 5°)
         np_img = self._deskew(np_img)
 
-        # Try multiple preprocessing strategies and pick the best one
-        # Strategy 1: Otsu's threshold (good for clear images)
-        _, thresh1 = cv2.threshold(np_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Strategy 2: Adaptive threshold (good for uneven lighting)
-        thresh2 = cv2.adaptiveThreshold(
-            np_img,
-            255,
+        # Adaptive threshold → black text on white background
+        binary = cv2.adaptiveThreshold(
+            np_img, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            15,  # Smaller block size for handwriting
-            8,   # Slightly higher C value
+            21, 10,
         )
-        
-        # Strategy 3: Morphological operations to strengthen thin strokes
-        kernel = np.ones((2, 2), np.uint8)
-        dilated = cv2.dilate(thresh2, kernel, iterations=1)
-        closed = cv2.morphologyEx(dilated, cv2.MORPH_CLOSE, kernel, iterations=1)
-        
-        # Use the closed version (strategy 3) as it's best for handwriting
-        # Sharpen using unsharp mask
-        blurred = cv2.GaussianBlur(closed, (0, 0), sigmaX=0.5)
-        sharpened = cv2.addWeighted(closed, 2.0, blurred, -1.0, 0)
-        
-        # Ensure we have proper contrast
-        # Invert to match Tesseract expectation (black text on white background)
-        inverted = cv2.bitwise_not(sharpened)
-        
-        # Final cleanup: remove small noise
-        kernel_clean = np.ones((1, 1), np.uint8)
-        cleaned = cv2.morphologyEx(inverted, cv2.MORPH_OPEN, kernel_clean, iterations=1)
-        
-        # Double-check inversion (should already be fixed, but verify)
-        # Count pixels: if more dark pixels, image is likely inverted
-        dark_pixels = np.sum(cleaned < 128)
-        total_pixels = cleaned.size
-        if dark_pixels > total_pixels * 0.6:  # More than 60% dark = likely inverted
-            cleaned = cv2.bitwise_not(cleaned)
-        
-        # Ensure proper data type and convert to PIL Image in grayscale mode
-        cleaned = np.clip(cleaned, 0, 255).astype(np.uint8)
-        pil_image = Image.fromarray(cleaned, mode='L')
-        
-        return pil_image
 
-    def _auto_orient_image(self, image: np.ndarray) -> np.ndarray:
-        """
-        Auto-rotate image to correct orientation (0, 90, 180, 270 degrees).
-        Uses aggressive heuristics for rotation detection.
-        """
-        h, w = image.shape
-        
-        # Aggressive heuristic: If image is taller than wide, rotate it
-        # Math equations are almost always wider than tall
-        if h > w * 1.1:  # Even slight portrait orientation
-            # Rotate 90° clockwise
-            image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
-            h, w = w, h  # Update dimensions
-        
-        # Try all 4 orientations and pick the one with best horizontal text distribution
-        orientations = [
-            (0, image),
-            (90, cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)),
-            (180, cv2.rotate(image, cv2.ROTATE_180)),
-            (270, cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)),
-        ]
-        
-        best_image = image
-        best_score = 0
-        
-        for angle, rotated in orientations:
-            # Calculate horizontal projection variance (higher = more horizontal text)
-            h_proj = np.sum(rotated, axis=0)
-            v_proj = np.sum(rotated, axis=1)
-            
-            # Score based on: high horizontal variance, low vertical variance
-            h_var = np.var(h_proj)
-            v_var = np.var(v_proj)
-            
-            # Prefer wider images with strong horizontal text lines
-            aspect_ratio = rotated.shape[1] / max(rotated.shape[0], 1)
-            score = h_var * aspect_ratio / max(v_var, 1)
-            
-            if score > best_score:
-                best_score = score
-                best_image = rotated
-        
-        return best_image
+        # Morphological close to reconnect broken strokes
+        kernel = np.ones((2, 2), np.uint8)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        # Guarantee black text on white background
+        # THRESH_BINARY: pixels > threshold → 255 (white), else → 0 (black)
+        # So text (darker regions) becomes 0 (black), background 255 (white). ✓
+        # If somehow the image is inverted, fix it.
+        if np.mean(binary) < 128:           # mostly black → flip
+            binary = cv2.bitwise_not(binary)
+
+        return Image.fromarray(binary.astype(np.uint8), mode='L')
+
+    # ── Kept for backward compatibility but no longer called ─────────────────
+
+    def _preprocess_image(self, image: Image.Image) -> Image.Image:
+        """Legacy wrapper — routes to _heavy_preprocess."""
+        return self._heavy_preprocess(image)
 
     def _deskew(self, image: np.ndarray) -> np.ndarray:
         """Correct slight rotations using minAreaRect."""
@@ -300,27 +348,33 @@ class OCRProcessor:
         return text
     
     def _run_easyocr(self, image: Image.Image) -> str:
-        """Run EasyOCR on a PIL image. Better for handwriting and rotated text."""
+        """Run EasyOCR on a lightly-preprocessed PIL image."""
         if not self.easyocr_reader:
-            # Fallback to Tesseract if EasyOCR not available
             return self._run_ocr(image)
-        
-        # Convert PIL to numpy array
+
         if image.mode != 'RGB':
             image = image.convert('RGB')
         np_img = np.array(image)
-        
-        # EasyOCR handles rotation automatically, so we can pass the image directly
-        # But we still want to use our preprocessed version
-        results = self.easyocr_reader.readtext(np_img)
-        
-        # Combine all detected text
-        text_lines = []
-        for (bbox, text, confidence) in results:
-            if confidence > 0.3:  # Filter low confidence detections
-                text_lines.append(text)
-        
-        return '\n'.join(text_lines)
+
+        # paragraph=False gives finer-grained bounding boxes, better for multi-line
+        results = self.easyocr_reader.readtext(np_img, paragraph=False)
+
+        # Collect detected text sorted top-to-bottom by bounding box y-coordinate
+        detections = []
+        for item in results:
+            bbox, text, confidence = item
+            if confidence > 0.2 and text.strip():    # lower threshold for handwriting
+                # Use the top-left y coordinate for ordering
+                top_y = min(pt[1] for pt in bbox)
+                detections.append((top_y, text.strip()))
+
+        detections.sort(key=lambda x: x[0])
+        text_lines = [t for _, t in detections]
+
+        combined = '\n'.join(text_lines)
+
+        # If EasyOCR returned almost nothing, let the caller fall back to Tesseract
+        return combined
 
     def _pil_to_png_bytes(self, image: Image.Image) -> bytes:
         buffer = io.BytesIO()

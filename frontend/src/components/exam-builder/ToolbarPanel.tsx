@@ -286,15 +286,22 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
   };
 
   const insertGraphHTML = (graphData: any) => {
-    // Insert as plain text description
-    const graphText = `[Graph: ${graphData.title || 'Chart'} - Type: ${graphData.type}, X: ${graphData.xLabel || 'X'}, Y: ${graphData.yLabel || 'Y'}, ${graphData.data ? graphData.data.length : 0} points]`;
-    editor.chain().focus().insertContent(graphText).run();
+    (editor.chain().focus() as any).insertGraph({
+      graphType: graphData.type,
+      data: graphData.data,
+      title: graphData.title || 'Graph',
+      xLabel: graphData.xLabel || 'X',
+      yLabel: graphData.yLabel || 'Y',
+    }).run();
   };
 
   const insertFormula = (latex: string, displayMode: boolean) => {
-    // Insert formula as LaTeX notation (students/readers will understand it)
-    const formulaText = displayMode ? `$$${latex}$$` : `$${latex}$`;
-    editor.chain().focus().insertContent(` ${formulaText} `).run();
+    const chain = editor.chain().focus() as any;
+    if (displayMode) {
+      chain.insertBlockMath({ latex }).run();
+    } else {
+      chain.insertInlineMath({ latex }).run();
+    }
   };
 
   const isTableSelected = editor.isActive('table');

@@ -20,6 +20,14 @@ except ImportError:
     ML_MATCHER_AVAILABLE = False
     logger.info("ML matcher not available. Using standard matching only.")
 
+# Try to import science synonym dictionary
+try:
+    from .science_synonyms import synonym_match_score, are_synonyms
+    SCIENCE_SYNONYMS_AVAILABLE = True
+except ImportError:
+    SCIENCE_SYNONYMS_AVAILABLE = False
+    logger.info("Science synonyms module not available.")
+
 
 class MatchingEngine:
     """
@@ -102,7 +110,13 @@ class MatchingEngine:
         score, strategy = self._normalized_match(student_text, gold_text)
         if score == 1.0:
             return score, strategy
-        
+
+        # Strategy 2b: Science synonym match (CO2 = carbon dioxide, ATP = adenosine triphosphate, etc.)
+        if SCIENCE_SYNONYMS_AVAILABLE:
+            syn_score = synonym_match_score(student_text, gold_text)
+            if syn_score >= 0.85:
+                return syn_score, "science_synonym_match"
+
         # Strategy 3: ML-based semantic matching (trained on Rwanda dataset)
         if self.use_ml and self.ml_matcher:
             score, strategy = self.ml_matcher.match(student_text, gold_text, question_context)
