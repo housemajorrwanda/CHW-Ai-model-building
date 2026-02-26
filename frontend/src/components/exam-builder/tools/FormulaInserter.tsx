@@ -16,6 +16,8 @@ import { FunctionSquare, AlignCenter, AlignLeft } from 'lucide-react';
 
 interface FormulaInserterProps {
   onInsert: (latex: string, displayMode: boolean) => void;
+  /** Render a compact icon-only trigger (for tight toolbars) */
+  compact?: boolean;
 }
 
 const commonFormulas = [
@@ -61,7 +63,7 @@ function FormulaRenderer({ latex, displayMode }: { latex: string; displayMode: b
   return <div ref={ref} />;
 }
 
-export function FormulaInserter({ onInsert }: FormulaInserterProps) {
+export function FormulaInserter({ onInsert, compact = false }: FormulaInserterProps) {
   const [open, setOpen] = useState(false);
   const [latex, setLatex] = useState('');
   const [displayMode, setDisplayMode] = useState(true);
@@ -82,10 +84,19 @@ export function FormulaInserter({ onInsert }: FormulaInserterProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="sm" className="h-8 px-2" type="button">
-          <FunctionSquare className="h-4 w-4 mr-1" />
-          Formula
-        </Button>
+        {compact ? (
+          <button
+            type="button"
+            title="Insert Formula (LaTeX)"
+            className="inline-flex items-center justify-center h-7 w-7 rounded text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <FunctionSquare className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <button type="button" title="Insert Formula (LaTeX)" className="inline-flex items-center gap-1 h-8 px-2 rounded text-xs font-medium hover:bg-accent transition-colors">
+            <FunctionSquare className="h-4 w-4" /> Formula
+          </button>
+        )}
       </DialogTrigger>
       <DialogContent className="max-w-2xl">
         <DialogHeader>

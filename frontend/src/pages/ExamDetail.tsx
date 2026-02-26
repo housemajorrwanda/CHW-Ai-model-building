@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -6,6 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import {
   ArrowLeft,
   FileText,
@@ -20,6 +28,8 @@ import {
   Trash2,
   Globe,
   GlobeLock,
+  BookOpenCheck,
+  ListChecks,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
@@ -67,6 +77,44 @@ export default function ExamDetail() {
       toast.error(err.message || 'Failed to unpublish exam');
     },
   });
+
+  const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const downloadPDF = async (includeSolutions: boolean) => {
+    if (!examId || !exam) return;
+    setIsDownloading(true);
+    setDownloadDialogOpen(false);
+    try {
+      const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+      const token = localStorage.getItem('auth_token');
+      const url = `${API_BASE_URL}/exams/${examId}/view-pdf?include_solutions=${includeSolutions}&t=${Date.now()}`;
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to download PDF: ${response.status} ${errorText}`);
+      }
+      const blob = await response.blob();
+      if (blob.size === 0) throw new Error('Received empty PDF file');
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      const suffix = includeSolutions ? '_with_solutions' : '_questions_only';
+      a.download = `${exam.title.replace(/\s+/g, '_')}${suffix}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(objectUrl);
+      document.body.removeChild(a);
+      toast.success('PDF downloaded successfully');
+    } catch (error: any) {
+      console.error('Failed to download PDF:', error);
+      toast.error(`Failed to download PDF: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   const handleDelete = () => {
     if (!examId || !exam) return;
@@ -325,40 +373,11 @@ export default function ExamDetail() {
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              onClick={async () => {
-                try {
-                  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-                  const token = localStorage.getItem('auth_token');
-                  const response = await fetch(`${API_BASE_URL}/exams/${examId}/view-pdf`, {
-                    headers: {
-                      'Authorization': `Bearer ${token}`,
-                    },
-                  });
-                  if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`Failed to download PDF: ${response.status} ${errorText}`);
-                  }
-                  const blob = await response.blob();
-                  if (blob.size === 0) {
-                    throw new Error('Received empty PDF file');
-                  }
-                  const url = window.URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `${exam.title.replace(/\s+/g, '_')}.pdf`;
-                  document.body.appendChild(a);
-                  a.click();
-                  window.URL.revokeObjectURL(url);
-                  document.body.removeChild(a);
-                  toast.success('PDF downloaded successfully');
-                } catch (error: any) {
-                  console.error('Failed to download PDF:', error);
-                  toast.error(`Failed to download PDF: ${error.message || 'Unknown error'}`);
-                }
-              }}
+              disabled={isDownloading}
+              onClick={() => setDownloadDialogOpen(true)}
             >
               <Download className="h-4 w-4 mr-2" />
-              Download PDF
+              {isDownloading ? 'Downloading…' : 'Download PDF'}
             </Button>
             {user?.role === 'professor' && (
               <>
@@ -429,6 +448,53 @@ export default function ExamDetail() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Download PDF dialog */}
+      <Dialog open={downloadDialogOpen} onOpenChange={setDownloadDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Download className="h-5 w-5" />
+              Download Exam PDF
+            </DialogTitle>
+            <DialogDescription>
+              Choose what to include in the downloaded PDF.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-3 pt-2">
+            <button
+              onClick={() => downloadPDF(false)}
+              className="flex items-start gap-4 rounded-lg border p-4 text-left hover:bg-muted/50 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <ListChecks className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Questions only</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Export the exam questions and answer spaces — suitable for printing and distributing to students.
+                </p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => downloadPDF(true)}
+              className="flex items-start gap-4 rounded-lg border p-4 text-left hover:bg-muted/50 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700">
+                <BookOpenCheck className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Questions + Golden Answers</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Include the reference solution steps and final answers — suitable for your own records or marking guides.
+                </p>
+              </div>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 }

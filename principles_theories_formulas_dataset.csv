@@ -1,0 +1,417 @@
+id,name,formula,description,category,subject
+1,Newton's First Law of Motion,F = 0 → v = constant,"An object at rest stays at rest, and an object in motion stays in motion at constant velocity, unless acted upon by an unbalanced force.",Law,Physics
+2,Newton's Second Law of Motion,F = ma,The acceleration of an object is directly proportional to the net force acting on it and inversely proportional to its mass.,Law,Physics
+3,Newton's Third Law of Motion,F₁₂ = -F₂₁,"For every action, there is an equal and opposite reaction.",Law,Physics
+4,Law of Universal Gravitation,F = G(m₁m₂)/r²,Every particle attracts every other particle with a force proportional to the product of their masses and inversely proportional to the square of the distance between them.,Law,Physics
+5,Conservation of Energy,E_total = constant,"Energy cannot be created or destroyed, only transformed from one form to another.",Principle,Physics
+6,Conservation of Momentum,Σp_initial = Σp_final,The total momentum of a closed system remains constant if no external forces act on it.,Principle,Physics
+7,Ohm's Law,V = IR,"The voltage across a conductor is directly proportional to the current flowing through it, with resistance as the constant of proportionality.",Law,Physics
+8,Coulomb's Law,F = k(q₁q₂)/r²,The force between two point charges is directly proportional to the product of their charges and inversely proportional to the square of the distance between them.,Law,Physics
+9,Faraday's Law of Electromagnetic Induction,ε = -dΦ/dt,The induced electromotive force in any closed circuit is equal to the negative of the time rate of change of the magnetic flux through the circuit.,Law,Physics
+10,Lenz's Law,ε = -dΦ/dt,The direction of induced current is such that it opposes the change causing it.,Law,Physics
+11,Einstein's Mass-Energy Equivalence,E = mc²,"Energy and mass are equivalent and can be converted into each other, where c is the speed of light.",Principle,Physics
+12,Planck's Law,E = hf,"The energy of a photon is proportional to its frequency, where h is Planck's constant.",Law,Physics
+13,Heisenberg Uncertainty Principle,Δx·Δp ≥ ħ/2,It is impossible to simultaneously know the exact position and momentum of a particle with perfect accuracy.,Principle,Physics
+14,Pauli Exclusion Principle,No two identical fermions can occupy the same quantum state,No two electrons in an atom can have the same set of four quantum numbers.,Principle,Physics
+15,Schrödinger Equation,iħ(∂ψ/∂t) = Ĥψ,The fundamental equation of quantum mechanics describing how quantum states evolve over time.,Equation,Physics
+16,Maxwell's Equations,"∇·E = ρ/ε₀, ∇×E = -∂B/∂t, ∇·B = 0, ∇×B = μ₀J + μ₀ε₀(∂E/∂t)",Four fundamental equations describing how electric and magnetic fields are generated and altered by charges and currents.,Law,Physics
+17,Boyle's Law,PV = constant (at constant T),The pressure of a gas is inversely proportional to its volume at constant temperature.,Law,Physics
+18,Charles's Law,V/T = constant (at constant P),The volume of a gas is directly proportional to its absolute temperature at constant pressure.,Law,Physics
+19,Ideal Gas Law,PV = nRT,"The relationship between pressure, volume, temperature, and number of moles of an ideal gas.",Law,Physics
+20,First Law of Thermodynamics,ΔU = Q - W,The change in internal energy of a system equals the heat added to the system minus the work done by the system.,Law,Physics
+21,Second Law of Thermodynamics,ΔS ≥ 0 (for isolated systems),The total entropy of an isolated system can never decrease over time.,Law,Physics
+22,Kinetic Energy,KE = (1/2)mv²,The energy possessed by an object due to its motion.,Formula,Physics
+23,Potential Energy (Gravitational),PE = mgh,The energy stored in an object due to its position in a gravitational field.,Formula,Physics
+24,Work-Energy Theorem,W = ΔKE,The work done on an object equals the change in its kinetic energy.,Theorem,Physics
+25,Power,P = W/t = Fv,The rate at which work is done or energy is transferred.,Formula,Physics
+26,Wave Equation,v = fλ,The speed of a wave equals its frequency multiplied by its wavelength.,Formula,Physics
+27,Snell's Law,n₁sin(θ₁) = n₂sin(θ₂),The relationship between the angles of incidence and refraction when light passes through different media.,Law,Physics
+28,Doppler Effect,f' = f(v ± v₀)/(v ∓ vₛ),The change in frequency of a wave in relation to an observer moving relative to the wave source.,Principle,Physics
+29,Einstein's Special Relativity - Time Dilation,t = t₀/√(1 - v²/c²),Time passes more slowly for objects moving at high speeds relative to an observer.,Principle,Physics
+30,Einstein's Special Relativity - Length Contraction,L = L₀√(1 - v²/c²),Objects appear shorter in the direction of motion when moving at high speeds.,Principle,Physics
+31,Photoelectric Effect,KE_max = hf - φ,Electrons are emitted from a material when light of sufficient frequency strikes it.,Principle,Physics
+32,De Broglie Wavelength,λ = h/p = h/(mv),"All matter exhibits wave-like properties, with wavelength inversely proportional to momentum.",Principle,Physics
+33,Rutherford Scattering,F = k(Ze)(2e)/(r²),"The scattering of alpha particles by atomic nuclei, leading to the discovery of the atomic nucleus.",Principle,Physics
+34,Blackbody Radiation,E = σT⁴,The total energy radiated per unit surface area of a blackbody is proportional to the fourth power of its temperature.,Law,Physics
+35,Bernoulli's Principle,P + (1/2)ρv² + ρgh = constant,"In a flowing fluid, an increase in speed occurs simultaneously with a decrease in pressure.",Principle,Physics
+36,Archimedes' Principle,F_buoyant = ρ_fluid × V_displaced × g,The upward buoyant force on an object immersed in a fluid equals the weight of the fluid displaced.,Principle,Physics
+37,Pascal's Principle,F₁/A₁ = F₂/A₂,Pressure applied to a confined fluid is transmitted undiminished to all parts of the fluid.,Principle,Physics
+38,Hooke's Law,F = -kx,The force needed to extend or compress a spring is proportional to the distance it is stretched or compressed.,Law,Physics
+39,Centripetal Force,F = mv²/r,The force required to keep an object moving in a circular path.,Formula,Physics
+40,Torque,τ = r × F = rFsin(θ),"The rotational equivalent of force, causing angular acceleration.",Formula,Physics
+41,Angular Momentum,L = r × p = Iω,"The rotational equivalent of linear momentum, conserved in closed systems.",Formula,Physics
+42,Moment of Inertia,I = Σmr²,"The resistance of an object to rotational motion, depending on mass distribution.",Formula,Physics
+43,Angular Velocity,ω = dθ/dt,The rate of change of angular displacement with respect to time.,Formula,Physics
+44,Angular Acceleration,α = dω/dt,The rate of change of angular velocity with respect to time.,Formula,Physics
+45,Rotational Kinetic Energy,KE_rot = (1/2)Iω²,The kinetic energy due to rotational motion of a rigid body.,Formula,Physics
+46,Simple Harmonic Motion,x(t) = A cos(ωt + φ),Periodic motion where restoring force is proportional to displacement.,Principle,Physics
+47,Period of Simple Pendulum,T = 2π√(L/g),The time period of a simple pendulum depends only on length and gravitational acceleration.,Formula,Physics
+48,Period of Spring-Mass System,T = 2π√(m/k),The period of oscillation for a mass-spring system depends on mass and spring constant.,Formula,Physics
+49,Electric Field,E = F/q = kQ/r²,The force per unit charge experienced by a test charge in an electric field.,Formula,Physics
+50,Electric Potential,V = kQ/r,The electric potential energy per unit charge at a point in space.,Formula,Physics
+51,Electric Potential Energy,U = qV = k(q₁q₂)/r,The energy stored in a system of charges due to their positions.,Formula,Physics
+52,Capacitance,C = Q/V,The ability of a capacitor to store charge per unit voltage.,Formula,Physics
+53,Energy Stored in Capacitor,U = (1/2)CV² = (1/2)Q²/C,The energy stored in a charged capacitor.,Formula,Physics
+54,Magnetic Field (Straight Wire),B = μ₀I/(2πr),The magnetic field around a straight current-carrying wire.,Formula,Physics
+55,Magnetic Force on Moving Charge,F = q(v × B),The force experienced by a moving charge in a magnetic field.,Formula,Physics
+56,Magnetic Force on Current-Carrying Wire,F = IL × B,The force on a current-carrying wire in a magnetic field.,Formula,Physics
+57,Magnetic Flux,Φ = B·A = BAcos(θ),The measure of magnetic field passing through a surface.,Formula,Physics
+58,Self-Inductance,L = Φ/I,"The ratio of magnetic flux to current in a coil, causing opposition to current change.",Formula,Physics
+59,Energy Stored in Inductor,U = (1/2)LI²,The energy stored in the magnetic field of an inductor.,Formula,Physics
+60,AC Circuit - RMS Voltage,V_rms = V₀/√2,"The root mean square voltage in an AC circuit, equivalent to DC voltage producing same power.",Formula,Physics
+61,AC Circuit - RMS Current,I_rms = I₀/√2,The root mean square current in an AC circuit.,Formula,Physics
+62,Resonant Frequency (LC Circuit),f = 1/(2π√(LC)),"The frequency at which an LC circuit resonates, storing energy between inductor and capacitor.",Formula,Physics
+63,Refraction Index,n = c/v,"The ratio of speed of light in vacuum to speed in a medium, determining light bending.",Formula,Physics
+64,Critical Angle,θ_c = arcsin(n₂/n₁),The angle of incidence beyond which total internal reflection occurs.,Formula,Physics
+65,Thin Lens Equation,1/f = 1/d₀ + 1/dᵢ,Relates focal length to object and image distances for thin lenses.,Formula,Physics
+66,Magnification,m = -dᵢ/d₀ = hᵢ/h₀,"The ratio of image height to object height, or negative ratio of image to object distance.",Formula,Physics
+67,Double-Slit Interference,d sin(θ) = mλ,The condition for constructive interference in double-slit experiment.,Formula,Physics
+68,Single-Slit Diffraction,a sin(θ) = mλ,The condition for destructive interference in single-slit diffraction.,Formula,Physics
+69,Bragg's Law,nλ = 2d sin(θ),The condition for constructive interference in X-ray diffraction from crystal planes.,Law,Physics
+70,Stefan-Boltzmann Law,P = σAT⁴,The total power radiated per unit area by a blackbody is proportional to the fourth power of temperature.,Law,Physics
+71,Wien's Displacement Law,λ_max T = b,The wavelength at which blackbody radiation peaks is inversely proportional to temperature.,Law,Physics
+72,Compton Scattering,Δλ = (h/(m_e c))(1 - cos(θ)),"The change in wavelength when X-rays scatter off electrons, demonstrating particle nature of light.",Principle,Physics
+73,Rydberg Constant,R_H = 1.097 × 10⁷ m⁻¹,The constant in the Rydberg formula for hydrogen spectral lines.,Constant,Physics
+74,Bohr Radius,a₀ = 5.29 × 10⁻¹¹ m,The most probable distance between electron and nucleus in hydrogen atom ground state.,Constant,Physics
+75,Fine Structure Constant,α = e²/(4πε₀ħc) ≈ 1/137,A dimensionless constant characterizing the strength of electromagnetic interaction.,Constant,Physics
+76,Schrödinger Equation (Time-Independent),Ĥψ = Eψ,The time-independent form of Schrödinger equation for stationary states.,Equation,Physics
+77,Wave Function Normalization,∫|ψ|² dV = 1,The probability density integrated over all space must equal one.,Principle,Physics
+78,Expectation Value,<A> = ∫ψ*Âψ dV,The average value of a physical quantity in quantum mechanics.,Formula,Physics
+79,Einstein's General Relativity Field Equations,G_μν = (8πG/c⁴)T_μν,The fundamental equations describing how matter and energy curve spacetime.,Equation,Physics
+80,Schwarzschild Radius,r_s = 2GM/c²,The radius of the event horizon of a non-rotating black hole.,Formula,Physics
+81,Gravitational Redshift,z = Δλ/λ = GM/(rc²),The shift in wavelength of light due to gravitational field.,Principle,Physics
+82,Escape Velocity,v_esc = √(2GM/r),The minimum velocity needed to escape gravitational field of a massive body.,Formula,Physics
+83,Orbital Velocity,v = √(GM/r),The velocity required for a satellite to maintain circular orbit.,Formula,Physics
+84,Kepler's First Law,Planets orbit in ellipses with Sun at one focus,The path of each planet around the Sun is an ellipse with the Sun at one focus.,Law,Physics
+85,Kepler's Second Law,dA/dt = constant,A line joining a planet and the Sun sweeps equal areas in equal times.,Law,Physics
+86,Kepler's Third Law,T² ∝ r³,The square of orbital period is proportional to cube of semi-major axis.,Law,Physics
+87,Reynolds Number,Re = ρvL/μ,Dimensionless number predicting flow regime (laminar vs turbulent) in fluid dynamics.,Formula,Physics
+88,Poiseuille's Law,Q = (πr⁴ΔP)/(8ηL),The volumetric flow rate through a pipe depends on pressure difference and pipe geometry.,Law,Physics
+89,Surface Tension,γ = F/L,The force per unit length acting along the boundary of a liquid surface.,Formula,Physics
+90,Young's Modulus,E = σ/ε = (F/A)/(ΔL/L),"The ratio of stress to strain, measuring material stiffness.",Formula,Physics
+91,Shear Modulus,G = τ/γ,"The ratio of shear stress to shear strain, measuring resistance to shear deformation.",Formula,Physics
+92,Bulk Modulus,K = -V(dP/dV),The resistance of a material to uniform compression.,Formula,Physics
+93,Pythagorean Theorem,a² + b² = c²,"In a right triangle, the square of the hypotenuse equals the sum of squares of the other two sides.",Theorem,Mathematics
+94,Fundamental Theorem of Calculus,∫[a to b] f'(x)dx = f(b) - f(a),The definite integral of a function's derivative over an interval equals the difference in the function's values at the endpoints.,Theorem,Mathematics
+95,Mean Value Theorem,f'(c) = (f(b) - f(a))/(b - a),"For a differentiable function on an interval, there exists a point where the instantaneous rate of change equals the average rate of change.",Theorem,Mathematics
+96,Intermediate Value Theorem,"If f(a) < k < f(b), then ∃c: f(c) = k",A continuous function takes on every value between its values at two points.,Theorem,Mathematics
+97,Binomial Theorem,"(a + b)ⁿ = Σ[k=0 to n] C(n,k) a^(n-k) b^k",Expands the power of a binomial expression into a sum of terms.,Theorem,Mathematics
+98,Euler's Formula,e^(iθ) = cos(θ) + i sin(θ),Relates complex exponentials to trigonometric functions.,Formula,Mathematics
+99,Euler's Identity,e^(iπ) + 1 = 0,"A special case of Euler's formula, considered one of the most beautiful equations in mathematics.",Identity,Mathematics
+100,Quadratic Formula,x = (-b ± √(b² - 4ac))/(2a),Solves quadratic equations of the form ax² + bx + c = 0.,Formula,Mathematics
+101,Distance Formula,d = √((x₂ - x₁)² + (y₂ - y₁)²),Calculates the distance between two points in a coordinate plane.,Formula,Mathematics
+102,Slope Formula,m = (y₂ - y₁)/(x₂ - x₁),Calculates the slope of a line passing through two points.,Formula,Mathematics
+103,Area of Circle,A = πr²,Calculates the area of a circle given its radius.,Formula,Mathematics
+104,Circumference of Circle,C = 2πr,Calculates the perimeter of a circle given its radius.,Formula,Mathematics
+105,Volume of Sphere,V = (4/3)πr³,Calculates the volume of a sphere given its radius.,Formula,Mathematics
+106,Surface Area of Sphere,SA = 4πr²,Calculates the surface area of a sphere given its radius.,Formula,Mathematics
+107,Law of Sines,a/sin(A) = b/sin(B) = c/sin(C),Relates the sides and angles of any triangle.,Law,Mathematics
+108,Law of Cosines,c² = a² + b² - 2ab cos(C),Generalizes the Pythagorean theorem to any triangle.,Law,Mathematics
+109,Derivative of xⁿ,d/dx(xⁿ) = nx^(n-1),The power rule for differentiation.,Rule,Mathematics
+110,Product Rule,d/dx(fg) = f'g + fg',Rule for finding the derivative of a product of two functions.,Rule,Mathematics
+111,Quotient Rule,d/dx(f/g) = (f'g - fg')/g²,Rule for finding the derivative of a quotient of two functions.,Rule,Mathematics
+112,Chain Rule,d/dx(f(g(x))) = f'(g(x))·g'(x),Rule for finding the derivative of a composite function.,Rule,Mathematics
+113,Integration by Parts,∫u dv = uv - ∫v du,Technique for integrating the product of two functions.,Rule,Mathematics
+114,L'Hôpital's Rule,lim[x→a] f(x)/g(x) = lim[x→a] f'(x)/g'(x),Method for evaluating limits of indeterminate forms.,Rule,Mathematics
+115,Taylor Series,f(x) = Σ[n=0 to ∞] (f^(n)(a)/n!)(x - a)ⁿ,Represents a function as an infinite sum of terms calculated from its derivatives at a point.,Series,Mathematics
+116,Fourier Series,f(x) = a₀/2 + Σ[n=1 to ∞] (aₙcos(nx) + bₙsin(nx)),Represents a periodic function as a sum of sine and cosine functions.,Series,Mathematics
+117,Bayes' Theorem,P(A|B) = P(B|A)·P(A)/P(B),Describes the probability of an event based on prior knowledge of conditions related to the event.,Theorem,Mathematics
+118,Central Limit Theorem,"As n → ∞, sample mean → N(μ, σ²/n)",The distribution of sample means approaches a normal distribution as sample size increases.,Theorem,Mathematics
+119,Fermat's Last Theorem,xⁿ + yⁿ = zⁿ has no integer solutions for n > 2,No three positive integers satisfy the equation for any integer power greater than 2.,Theorem,Mathematics
+120,Gödel's Incompleteness Theorems,Any consistent formal system is incomplete,"In any sufficiently powerful formal system, there are true statements that cannot be proven within the system.",Theorem,Mathematics
+121,Pythagorean Identity,sin²(θ) + cos²(θ) = 1,Fundamental trigonometric identity relating sine and cosine.,Identity,Mathematics
+122,Sum of Angles Formula,sin(A + B) = sin(A)cos(B) + cos(A)sin(B),Formula for the sine of the sum of two angles.,Formula,Mathematics
+123,Logarithm Properties,"log(ab) = log(a) + log(b), log(a/b) = log(a) - log(b)",Fundamental properties of logarithms for multiplication and division.,Property,Mathematics
+124,Change of Base Formula,log_b(x) = log_a(x)/log_a(b),Converts logarithms from one base to another.,Formula,Mathematics
+125,Sum of Arithmetic Series,S_n = n/2(a₁ + aₙ) = n/2(2a₁ + (n-1)d),Calculates the sum of the first n terms of an arithmetic sequence.,Formula,Mathematics
+126,Sum of Geometric Series,S_n = a₁(1 - rⁿ)/(1 - r),Calculates the sum of the first n terms of a geometric sequence.,Formula,Mathematics
+127,Infinite Geometric Series,S = a₁/(1 - r) for |r| < 1,Calculates the sum of an infinite geometric series when the common ratio is between -1 and 1.,Formula,Mathematics
+128,Euler's Number,e = lim[n→∞] (1 + 1/n)ⁿ ≈ 2.71828,"The base of natural logarithms, fundamental in calculus and exponential growth.",Constant,Mathematics
+129,Golden Ratio,φ = (1 + √5)/2 ≈ 1.618,The ratio where the whole is to the larger part as the larger part is to the smaller part.,Constant,Mathematics
+130,Fibonacci Sequence,Fₙ = Fₙ₋₁ + Fₙ₋₂,"A sequence where each number is the sum of the two preceding ones, starting from 0 and 1.",Sequence,Mathematics
+131,Area of Triangle,A = (1/2)bh = (1/2)ab sin(C),"The area of a triangle equals half the product of base and height, or half the product of two sides and sine of included angle.",Formula,Mathematics
+132,Area of Rectangle,A = lw,The area of a rectangle equals length times width.,Formula,Mathematics
+133,Area of Parallelogram,A = bh,The area of a parallelogram equals base times height.,Formula,Mathematics
+134,Area of Trapezoid,A = (1/2)(a + b)h,The area of a trapezoid equals half the sum of parallel sides times height.,Formula,Mathematics
+135,Volume of Cylinder,V = πr²h,The volume of a cylinder equals the area of circular base times height.,Formula,Mathematics
+136,Volume of Cone,V = (1/3)πr²h,The volume of a cone equals one-third the volume of a cylinder with same base and height.,Formula,Mathematics
+137,Surface Area of Cylinder,SA = 2πr² + 2πrh,The total surface area of a cylinder equals two circular bases plus lateral surface.,Formula,Mathematics
+138,Surface Area of Cone,SA = πr² + πr√(r² + h²),The total surface area of a cone equals base area plus lateral surface area.,Formula,Mathematics
+139,Volume of Pyramid,V = (1/3)Bh,The volume of a pyramid equals one-third the product of base area and height.,Formula,Mathematics
+140,Midpoint Formula,"M = ((x₁ + x₂)/2, (y₁ + y₂)/2)",Finds the midpoint between two points in a coordinate plane.,Formula,Mathematics
+141,Equation of Circle,(x - h)² + (y - k)² = r²,"The standard form equation of a circle with center (h,k) and radius r.",Formula,Mathematics
+142,Equation of Ellipse,(x-h)²/a² + (y-k)²/b² = 1,"The standard form equation of an ellipse centered at (h,k) with semi-axes a and b.",Formula,Mathematics
+143,Equation of Parabola,y = a(x-h)² + k,"The vertex form equation of a parabola with vertex (h,k) and vertical axis.",Formula,Mathematics
+144,Equation of Hyperbola,(x-h)²/a² - (y-k)²/b² = 1,"The standard form equation of a hyperbola centered at (h,k).",Formula,Mathematics
+145,Derivative of e^x,d/dx(e^x) = e^x,The exponential function is its own derivative.,Rule,Mathematics
+146,Derivative of ln(x),d/dx(ln(x)) = 1/x,The derivative of natural logarithm is the reciprocal function.,Rule,Mathematics
+147,Derivative of sin(x),d/dx(sin(x)) = cos(x),The derivative of sine is cosine.,Rule,Mathematics
+148,Derivative of cos(x),d/dx(cos(x)) = -sin(x),The derivative of cosine is negative sine.,Rule,Mathematics
+149,Derivative of tan(x),d/dx(tan(x)) = sec²(x),The derivative of tangent is secant squared.,Rule,Mathematics
+150,Integration of 1/x,∫(1/x)dx = ln|x| + C,The integral of reciprocal function is natural logarithm of absolute value.,Rule,Mathematics
+151,Integration by Substitution,∫f(g(x))g'(x)dx = ∫f(u)du,Technique for integration using substitution u = g(x).,Rule,Mathematics
+152,Fundamental Theorem of Algebra,Every polynomial of degree n has exactly n complex roots,A polynomial equation of degree n has exactly n roots in the complex number system.,Theorem,Mathematics
+153,Remainder Theorem,P(a) = remainder when P(x) is divided by (x-a),"When a polynomial P(x) is divided by (x-a), the remainder is P(a).",Theorem,Mathematics
+154,Factor Theorem,"If P(a) = 0, then (x-a) is a factor of P(x)",A polynomial has (x-a) as a factor if and only if P(a) = 0.,Theorem,Mathematics
+155,Rational Root Theorem,Possible rational roots = ±(factors of constant)/(factors of leading coefficient),Lists all possible rational roots of a polynomial equation with integer coefficients.,Theorem,Mathematics
+156,Pascal's Triangle,Each number is sum of two numbers directly above it,A triangular array of binomial coefficients used in combinatorics and algebra.,Principle,Mathematics
+157,Permutation Formula,"P(n,r) = n!/(n-r)!",The number of ways to arrange r objects from n distinct objects.,Formula,Mathematics
+158,Combination Formula,"C(n,r) = n!/(r!(n-r)!)",The number of ways to choose r objects from n distinct objects without regard to order.,Formula,Mathematics
+159,Binomial Coefficient,"C(n,k) = n!/(k!(n-k)!)","The coefficient of x^k in expansion of (1+x)^n, also written as (n choose k).",Formula,Mathematics
+160,Expected Value,E[X] = Σx·P(x),"The average value of a random variable, weighted by probability distribution.",Formula,Mathematics
+161,Variance,Var(X) = E[X²] - (E[X])²,The measure of spread or dispersion of a probability distribution.,Formula,Mathematics
+162,Standard Deviation,σ = √Var(X),"The square root of variance, measuring spread in same units as the variable.",Formula,Mathematics
+163,Normal Distribution,f(x) = (1/(σ√(2π)))e^(-(x-μ)²/(2σ²)),The probability density function of the bell-shaped normal distribution.,Formula,Mathematics
+164,Z-Score,z = (x - μ)/σ,The number of standard deviations a value is from the mean in a normal distribution.,Formula,Mathematics
+165,Correlation Coefficient,r = Σ((x-x̄)(y-ȳ))/(√(Σ(x-x̄)²)√(Σ(y-ȳ)²)),Measures the strength and direction of linear relationship between two variables.,Formula,Mathematics
+166,Linear Regression Slope,m = r(σ_y/σ_x),The slope of the least-squares regression line relating two variables.,Formula,Mathematics
+167,Matrix Multiplication,(AB)_ij = ΣA_ik B_kj,"The element in row i, column j of product matrix equals sum of products of corresponding elements.",Rule,Mathematics
+168,Determinant of 2x2 Matrix,det(A) = ad - bc,"For matrix [[a,b],[c,d]], the determinant equals ad minus bc.",Formula,Mathematics
+169,Inverse of 2x2 Matrix,"A⁻¹ = (1/det(A))[[d,-b],[-c,a]]","The inverse of a 2x2 matrix, if determinant is non-zero.",Formula,Mathematics
+170,Dot Product,a·b = |a||b|cos(θ) = Σa_i b_i,"The scalar product of two vectors, equal to product of magnitudes and cosine of angle.",Formula,Mathematics
+171,Cross Product,a × b = |a||b|sin(θ)n,"The vector product of two vectors, perpendicular to both, with magnitude equal to area of parallelogram.",Formula,Mathematics
+172,Magnitude of Vector,|v| = √(v₁² + v₂² + v₃²),The length or magnitude of a vector in three-dimensional space.,Formula,Mathematics
+173,Unit Vector,û = v/|v|,"A vector with magnitude 1, pointing in same direction as original vector.",Formula,Mathematics
+174,Polar to Cartesian Conversion,"x = r cos(θ), y = r sin(θ)","Converts polar coordinates (r,θ) to Cartesian coordinates (x,y).",Formula,Mathematics
+175,Cartesian to Polar Conversion,"r = √(x² + y²), θ = arctan(y/x)","Converts Cartesian coordinates (x,y) to polar coordinates (r,θ).",Formula,Mathematics
+176,Euler's Totient Function,φ(n) = n × Π(1 - 1/p) for prime factors p,Counts positive integers up to n that are relatively prime to n.,Function,Mathematics
+177,Fermat's Little Theorem,"a^(p-1) ≡ 1 (mod p) for prime p and gcd(a,p)=1","If p is prime and a is not divisible by p, then a raised to (p-1) is congruent to 1 modulo p.",Theorem,Mathematics
+178,Chinese Remainder Theorem,System x ≡ a_i (mod n_i) has unique solution modulo product of n_i,Provides conditions for existence and uniqueness of solutions to simultaneous congruences.,Theorem,Mathematics
+179,L'Hôpital's Rule (Extended),lim f/g = lim f'/g' = lim f''/g'' = ...,Can be applied repeatedly if first application yields indeterminate form.,Rule,Mathematics
+180,Maclaurin Series,f(x) = Σ[n=0 to ∞] (f^(n)(0)/n!)x^n,"Taylor series expansion centered at zero, representing function as infinite polynomial.",Series,Mathematics
+181,Geometric Series Sum,Σ[n=0 to ∞] ar^n = a/(1-r) for |r| < 1,The sum of infinite geometric series converges when common ratio has absolute value less than 1.,Formula,Mathematics
+182,Riemann Sum,Σ f(x_i*)Δx,Approximation of definite integral using sum of function values times subinterval widths.,Formula,Mathematics
+183,Trapezoidal Rule,∫[a to b] f(x)dx ≈ (b-a)/2n [f(x₀) + 2Σf(x_i) + f(x_n)],Numerical integration method approximating area under curve using trapezoids.,Rule,Mathematics
+184,Simpson's Rule,∫[a to b] f(x)dx ≈ (b-a)/6n [f(x₀) + 4Σf(x_odd) + 2Σf(x_even) + f(x_n)],"Numerical integration method using parabolic approximations, more accurate than trapezoidal rule.",Rule,Mathematics
+185,Cell Theory,All living things are composed of cells; cells are the basic unit of life; cells arise from pre-existing cells,"The fundamental principle that all living organisms are composed of one or more cells, and that cells are the basic structural and functional units of life.",Theory,Biology
+186,Theory of Evolution by Natural Selection,Variation + Inheritance + Selection = Evolution,"Organisms with traits better suited to their environment are more likely to survive and reproduce, passing those traits to offspring.",Theory,Biology
+187,Mendel's Laws of Inheritance,Law of Segregation: Alleles separate during gamete formation; Law of Independent Assortment: Genes for different traits assort independently,Fundamental principles of genetics describing how traits are inherited from parents to offspring.,Law,Biology
+188,Hardy-Weinberg Principle,p² + 2pq + q² = 1,"In a population with no evolutionary forces, allele and genotype frequencies remain constant from generation to generation.",Principle,Biology
+189,Central Dogma of Molecular Biology,DNA → RNA → Protein,"The flow of genetic information from DNA to RNA to protein, with DNA replication as the exception.",Principle,Biology
+190,Watson-Crick Base Pairing,"A-T (2 H-bonds), G-C (3 H-bonds)","The specific pairing of nucleotide bases in DNA: adenine with thymine, and guanine with cytosine.",Principle,Biology
+191,Chargaff's Rules,"A = T, G = C, (A + G) = (T + C)","In DNA, the amount of adenine equals thymine, and guanine equals cytosine.",Rule,Biology
+192,Michaelis-Menten Equation,v = (V_max × [S])/(K_m + [S]),Describes the rate of enzymatic reactions as a function of substrate concentration.,Equation,Biology
+193,Photosynthesis Equation,6CO₂ + 6H₂O + light energy → C₆H₁₂O₆ + 6O₂,The process by which plants convert carbon dioxide and water into glucose using light energy.,Equation,Biology
+194,Cellular Respiration Equation,C₆H₁₂O₆ + 6O₂ → 6CO₂ + 6H₂O + ATP,The process by which cells break down glucose to produce ATP (energy) in the presence of oxygen.,Equation,Biology
+195,ATP Production Formula,ATP = ADP + Pᵢ + energy,"Adenosine triphosphate is formed from adenosine diphosphate and inorganic phosphate, storing energy.",Formula,Biology
+196,Population Growth (Exponential),N(t) = N₀e^(rt),"Describes population growth when resources are unlimited, where r is the growth rate.",Formula,Biology
+197,Logistic Growth Model,dN/dt = rN(1 - N/K),"Describes population growth with carrying capacity K, showing S-shaped growth curve.",Formula,Biology
+198,Nernst Equation,E = E° - (RT/nF)ln(Q),Calculates the equilibrium potential for an ion across a membrane based on concentration gradient.,Equation,Biology
+199,Fick's Law of Diffusion,J = -D(dC/dx),The rate of diffusion is proportional to the concentration gradient and inversely proportional to distance.,Law,Biology
+200,Boyle's Law (Biological Application),P₁V₁ = P₂V₂,"In respiratory physiology, the relationship between pressure and volume in the lungs.",Law,Biology
+201,Cardiac Output,CO = HR × SV,"The volume of blood pumped by the heart per minute, equal to heart rate times stroke volume.",Formula,Biology
+202,Blood Pressure,BP = CO × TPR,Blood pressure equals cardiac output multiplied by total peripheral resistance.,Formula,Biology
+203,Genotype Frequency,"f(AA) = p², f(Aa) = 2pq, f(aa) = q²","In Hardy-Weinberg equilibrium, genotype frequencies are determined by allele frequencies.",Formula,Biology
+204,Allele Frequency,p + q = 1,The sum of allele frequencies for a gene locus equals 1 in a population.,Formula,Biology
+205,Heritability,h² = V_G/V_P,The proportion of phenotypic variance attributable to genetic variance.,Formula,Biology
+206,DNA Replication Semi-Conservative Model,Parent DNA → 2 Daughter DNA (each with one old and one new strand),Each DNA molecule consists of one original strand and one newly synthesized strand.,Principle,Biology
+207,Genetic Code,64 codons code for 20 amino acids + 3 stop codons,The universal code by which nucleotide triplets (codons) specify amino acids in proteins.,Principle,Biology
+208,Allometric Scaling,Y = aM^b,"The relationship between body size and biological variables, often following power laws.",Principle,Biology
+209,Metabolic Rate (Kleiber's Law),BMR ∝ M^(3/4),Basal metabolic rate scales to the 3/4 power of body mass across species.,Law,Biology
+210,Species-Area Relationship,S = cA^z,"The number of species increases with area, following a power law relationship.",Principle,Biology
+211,Lotka-Volterra Predator-Prey Model,"dN/dt = rN - aNP, dP/dt = baNP - mP",Mathematical model describing the dynamics of predator and prey populations.,Model,Biology
+212,Competitive Exclusion Principle,Two species cannot occupy the same ecological niche indefinitely,"When two species compete for the same limited resource, one will eventually outcompete the other.",Principle,Biology
+213,Ecological Succession,Pioneer species → Intermediate species → Climax community,The process by which the structure of a biological community evolves over time.,Principle,Biology
+214,Homeostasis,Set point → Sensor → Control center → Effector → Response,The maintenance of a stable internal environment despite external changes.,Principle,Biology
+215,Negative Feedback Loop,Stimulus → Response → Reduced stimulus,"A regulatory mechanism where the output reduces the initial stimulus, maintaining homeostasis.",Principle,Biology
+216,Positive Feedback Loop,Stimulus → Response → Enhanced stimulus,"A regulatory mechanism where the output amplifies the initial stimulus, leading to rapid change.",Principle,Biology
+217,DNA Replication Rate,Rate ≈ 1000 nucleotides/second,The approximate rate at which DNA polymerase synthesizes new DNA strands during replication.,Formula,Biology
+218,Transcription Rate,Rate ≈ 50-100 nucleotides/second,The approximate rate at which RNA polymerase synthesizes mRNA during transcription.,Formula,Biology
+219,Translation Rate,Rate ≈ 15-20 amino acids/second,The approximate rate at which ribosomes synthesize proteins during translation.,Formula,Biology
+220,DNA Base Pairing Rules,"A-T (2 H-bonds), G-C (3 H-bonds)",The specific hydrogen bonding patterns between complementary nucleotide bases in DNA double helix.,Rule,Biology
+221,RNA Base Pairing Rules,"A-U, G-C (in RNA)","Base pairing rules in RNA, where uracil replaces thymine in pairing with adenine.",Rule,Biology
+222,Genetic Code Degeneracy,64 codons code for 20 amino acids,"Multiple codons can code for the same amino acid, providing redundancy in genetic code.",Principle,Biology
+223,Mendel's Law of Segregation,Alleles separate during gamete formation,"During gamete formation, the two alleles for a trait separate, with each gamete receiving one allele.",Law,Biology
+224,Mendel's Law of Independent Assortment,Genes for different traits assort independently,Genes for different traits are inherited independently of each other during gamete formation.,Law,Biology
+225,Punnett Square,2×2 grid showing all possible genotype combinations,A diagram used to predict the genotypes and phenotypes of offspring from a genetic cross.,Method,Biology
+226,Chi-Square Test,χ² = Σ((O - E)²/E),Statistical test to determine if observed data matches expected Mendelian ratios.,Formula,Biology
+227,Linkage and Recombination,Recombination frequency = (recombinants/total) × 100%,Genes on same chromosome are linked; recombination frequency indicates distance between genes.,Principle,Biology
+228,Hardy-Weinberg Equilibrium Conditions,"No mutation, migration, selection, genetic drift, or non-random mating",Five conditions required for allele frequencies to remain constant from generation to generation.,Principle,Biology
+229,Natural Selection,differential survival and reproduction of individuals with favorable traits,The mechanism of evolution where organisms with advantageous traits are more likely to survive and reproduce.,Principle,Biology
+230,Fitness,Relative reproductive success,"The ability of an organism to survive and reproduce in its environment, relative to others.",Concept,Biology
+231,Selection Coefficient,s = 1 - w,"The reduction in fitness of a genotype relative to the fittest genotype, where w is relative fitness.",Formula,Biology
+232,Mutation Rate,μ = mutations per generation per base pair,The frequency at which mutations occur in DNA sequences.,Formula,Biology
+233,Genetic Drift,Random changes in allele frequencies due to sampling,The random fluctuation of allele frequencies in small populations due to chance events.,Principle,Biology
+234,Founder Effect,Small founding population → reduced genetic diversity,"When a small group establishes a new population, genetic diversity is reduced compared to source population.",Principle,Biology
+235,Bottleneck Effect,Population crash → reduced genetic diversity,"When a population undergoes severe reduction, genetic diversity decreases dramatically.",Principle,Biology
+236,Gene Flow,Migration introduces new alleles,The transfer of genetic variation from one population to another through migration.,Principle,Biology
+237,Speciation,Reproductive isolation → new species,"The process by which populations evolve to become distinct species, typically through reproductive isolation.",Principle,Biology
+238,Allopatric Speciation,Geographic isolation → speciation,Speciation that occurs when populations are geographically separated.,Principle,Biology
+239,Sympatric Speciation,Speciation without geographic isolation,"Speciation that occurs in the same geographic area, often through polyploidy or habitat specialization.",Principle,Biology
+240,Ecological Niche,The role and position of a species in its environment,"The ecological role of a species, including its habitat, resources used, and interactions with other species.",Concept,Biology
+241,Trophic Level Efficiency,Efficiency ≈ 10%,Only about 10% of energy is transferred from one trophic level to the next in food chains.,Principle,Biology
+242,Carrying Capacity,K = maximum population size environment can support,The maximum number of individuals of a species that an environment can sustain indefinitely.,Concept,Biology
+243,Exponential Growth,dN/dt = rN,"Population growth when resources are unlimited, resulting in exponential increase.",Formula,Biology
+244,Logistic Growth,dN/dt = rN(1 - N/K),"Population growth with carrying capacity, showing S-shaped curve.",Formula,Biology
+245,Intrinsic Growth Rate,r = birth rate - death rate,The maximum per capita growth rate of a population under ideal conditions.,Formula,Biology
+246,Biomass Pyramid,Producers > Primary consumers > Secondary consumers,The decrease in total biomass at each successive trophic level in an ecosystem.,Principle,Biology
+247,Primary Productivity,GPP = NPP + R,Gross primary productivity equals net primary productivity plus respiration.,Formula,Biology
+248,Net Primary Productivity,NPP = GPP - R,The rate at which energy is stored by producers after accounting for respiration.,Formula,Biology
+249,Carbon Cycle,CO₂ ↔ Organic compounds ↔ CO₂,"The biogeochemical cycle by which carbon moves between atmosphere, organisms, and Earth.",Principle,Biology
+250,Nitrogen Cycle,N₂ → NH₃ → NO₂⁻ → NO₃⁻ → Organic N,The biogeochemical cycle converting atmospheric nitrogen into forms usable by organisms.,Principle,Biology
+251,Phosphorus Cycle,Rocks → Soil → Plants → Animals → Decomposers,"The biogeochemical cycle moving phosphorus through lithosphere, hydrosphere, and biosphere.",Principle,Biology
+252,Water Cycle,Evaporation → Condensation → Precipitation → Runoff,"The continuous movement of water through Earth's systems via evaporation, condensation, and precipitation.",Principle,Biology
+253,Osmotic Pressure,π = iMRT,"The pressure required to prevent osmosis, where i is van't Hoff factor, M is molarity.",Formula,Biology
+254,Osmosis,Water moves from low to high solute concentration,The passive movement of water across a semipermeable membrane from low to high solute concentration.,Principle,Biology
+255,Diffusion,J = -D(dC/dx),"The passive movement of particles from high to low concentration, following Fick's law.",Principle,Biology
+256,Active Transport,Requires ATP to move against concentration gradient,"The movement of molecules across membrane against concentration gradient, requiring energy input.",Principle,Biology
+257,Facilitated Diffusion,Passive transport via carrier proteins,The passive movement of molecules across membrane through protein channels or carriers.,Principle,Biology
+258,Enzyme Kinetics - Vmax,V_max = k_cat[E]_total,The maximum reaction rate when enzyme is saturated with substrate.,Formula,Biology
+259,Enzyme Kinetics - Km,K_m = (k_{-1} + k_2)/k_1,"The Michaelis constant, equal to substrate concentration at half-maximal velocity.",Constant,Biology
+260,Enzyme Efficiency,k_cat/K_m,"The catalytic efficiency of an enzyme, measuring how well it converts substrate to product.",Formula,Biology
+261,Lineweaver-Burk Plot,1/v = (K_m/V_max)(1/[S]) + 1/V_max,Double reciprocal plot used to determine V_max and K_m from enzyme kinetics data.,Method,Biology
+262,Allosteric Regulation,Binding at one site affects activity at another site,Regulation of enzyme activity through binding of effector molecules at sites other than active site.,Principle,Biology
+263,Cooperativity,Binding of one ligand increases affinity for others,The phenomenon where binding of one substrate molecule increases enzyme's affinity for additional substrates.,Principle,Biology
+264,Hill Coefficient,n_H = measure of cooperativity,A measure of cooperativity in enzyme kinetics; n_H > 1 indicates positive cooperativity.,Formula,Biology
+265,Gibbs Free Energy in Biochemistry,ΔG = ΔG°' + RT ln([products]/[reactants]),"The change in free energy for biochemical reactions, accounting for standard conditions and concentrations.",Formula,Biology
+266,ATP Hydrolysis,"ATP + H₂O → ADP + Pᵢ, ΔG ≈ -30.5 kJ/mol",The hydrolysis of ATP releases energy used to drive endergonic reactions in cells.,Equation,Biology
+267,Redox Potential,E = E°' - (RT/nF)ln([reduced]/[oxidized]),"The tendency of a chemical species to gain electrons, determining direction of redox reactions.",Formula,Biology
+268,Glycolysis Net ATP,2 ATP per glucose molecule,"The net ATP production from glycolysis, producing 4 ATP but consuming 2 ATP.",Formula,Biology
+269,Citric Acid Cycle ATP Yield,"1 ATP, 3 NADH, 1 FADH₂ per acetyl-CoA",The energy carriers produced per turn of citric acid cycle from one acetyl-CoA molecule.,Formula,Biology
+270,Oxidative Phosphorylation ATP,"~2.5 ATP per NADH, ~1.5 ATP per FADH₂",The approximate ATP yield from electron transport chain per reduced coenzyme.,Formula,Biology
+271,Total ATP from Glucose,~30-32 ATP per glucose molecule,The total ATP yield from complete oxidation of one glucose molecule through cellular respiration.,Formula,Biology
+272,Calvin Cycle,3 CO₂ + 9 ATP + 6 NADPH → G3P + 9 ADP + 6 NADP⁺,The light-independent reactions of photosynthesis that fix carbon dioxide into organic molecules.,Equation,Biology
+273,Light Reactions,H₂O + NADP⁺ + ADP + Pᵢ → O₂ + NADPH + ATP,The light-dependent reactions of photosynthesis that produce ATP and NADPH.,Equation,Biology
+274,Chlorophyll Absorption,Absorbs red (680nm) and blue (430nm) light,"Chlorophyll molecules absorb light most efficiently in red and blue wavelengths, reflecting green.",Principle,Biology
+275,Action Spectrum,Rate of photosynthesis vs wavelength,The effectiveness of different wavelengths of light in driving photosynthesis.,Concept,Biology
+276,Photorespiration,Rubisco fixes O₂ instead of CO₂,"A wasteful process where rubisco binds oxygen instead of carbon dioxide, reducing photosynthetic efficiency.",Principle,Biology
+277,C4 Photosynthesis,CO₂ fixed into 4-carbon compound first,A photosynthetic pathway that minimizes photorespiration by initially fixing CO₂ into 4-carbon compounds.,Principle,Biology
+278,CAM Photosynthesis,"CO₂ fixed at night, used during day",Crassulacean acid metabolism where plants fix CO₂ at night and use it during the day to minimize water loss.,Principle,Biology
+279,Avogadro's Law,V ∝ n (at constant T and P),Equal volumes of gases at the same temperature and pressure contain equal numbers of molecules.,Law,Chemistry
+280,Avogadro's Number,N_A = 6.022 × 10²³ mol⁻¹,"The number of particles (atoms, molecules, ions) in one mole of a substance.",Constant,Chemistry
+281,Ideal Gas Law,PV = nRT,"The relationship between pressure, volume, temperature, and number of moles of an ideal gas.",Law,Chemistry
+282,Combined Gas Law,P₁V₁/T₁ = P₂V₂/T₂,"Combines Boyle's, Charles's, and Gay-Lussac's laws into a single equation.",Law,Chemistry
+283,Dalton's Law of Partial Pressures,P_total = P₁ + P₂ + P₃ + ...,The total pressure of a mixture of gases equals the sum of the partial pressures of the individual gases.,Law,Chemistry
+284,Graham's Law of Effusion,Rate₁/Rate₂ = √(M₂/M₁),The rate of effusion of a gas is inversely proportional to the square root of its molar mass.,Law,Chemistry
+285,Raoult's Law,P = X_solvent × P°_solvent,The vapor pressure of a solution is proportional to the mole fraction of the solvent.,Law,Chemistry
+286,Henry's Law,C = k_H × P,The amount of gas dissolved in a liquid is proportional to the partial pressure of the gas above the liquid.,Law,Chemistry
+287,Hess's Law,ΔH_reaction = ΣΔH_products - ΣΔH_reactants,The total enthalpy change for a reaction is independent of the pathway taken.,Law,Chemistry
+288,First Law of Thermodynamics (Chemistry),ΔU = q + w,The change in internal energy equals the heat added to the system plus the work done on the system.,Law,Chemistry
+289,Gibbs Free Energy,ΔG = ΔH - TΔS,"The energy available to do work in a chemical reaction, determining spontaneity.",Formula,Chemistry
+290,Entropy Change,ΔS = q_rev/T,"The measure of disorder or randomness in a system, related to reversible heat transfer.",Formula,Chemistry
+291,Arrhenius Equation,k = Ae^(-E_a/RT),"Describes the temperature dependence of reaction rates, where E_a is activation energy.",Equation,Chemistry
+292,Rate Law,Rate = k[A]^m[B]^n,The rate of a chemical reaction is proportional to the concentrations of reactants raised to their reaction orders.,Law,Chemistry
+293,Equilibrium Constant (Kc),Kc = [C]^c[D]^d / [A]^a[B]^b,"The ratio of product concentrations to reactant concentrations at equilibrium, each raised to their stoichiometric coefficients.",Constant,Chemistry
+294,Equilibrium Constant (Kp),Kp = (P_C^c)(P_D^d) / (P_A^a)(P_B^b),The equilibrium constant expressed in terms of partial pressures for gas-phase reactions.,Constant,Chemistry
+295,Le Chatelier's Principle,System responds to minimize stress,"When a system at equilibrium is disturbed, it shifts to counteract the disturbance and restore equilibrium.",Principle,Chemistry
+296,pH Formula,pH = -log[H⁺],"The negative logarithm of the hydrogen ion concentration, measuring acidity.",Formula,Chemistry
+297,pOH Formula,pOH = -log[OH⁻],The negative logarithm of the hydroxide ion concentration.,Formula,Chemistry
+298,pH + pOH Relationship,pH + pOH = 14 (at 25°C),The sum of pH and pOH equals 14 for aqueous solutions at standard temperature.,Formula,Chemistry
+299,Ion Product of Water,K_w = [H⁺][OH⁻] = 1.0 × 10⁻¹⁴,The product of hydrogen and hydroxide ion concentrations in water at 25°C.,Constant,Chemistry
+300,Acid Dissociation Constant (Ka),Ka = [H⁺][A⁻] / [HA],The equilibrium constant for the dissociation of a weak acid.,Constant,Chemistry
+301,Base Dissociation Constant (Kb),Kb = [OH⁻][BH⁺] / [B],The equilibrium constant for the dissociation of a weak base.,Constant,Chemistry
+302,Henderson-Hasselbalch Equation,pH = pKa + log([A⁻]/[HA]),Relates the pH of a buffer solution to the pKa and the ratio of conjugate base to acid.,Equation,Chemistry
+303,Nernst Equation (Electrochemistry),E = E° - (RT/nF)ln(Q),Calculates the cell potential under non-standard conditions based on the reaction quotient.,Equation,Chemistry
+304,Faraday's Law of Electrolysis,m = (M × I × t) / (n × F),The mass of substance deposited or liberated at an electrode is proportional to the charge passed.,Law,Chemistry
+305,Standard Cell Potential,E°_cell = E°_cathode - E°_anode,The difference between standard reduction potentials of cathode and anode half-cells.,Formula,Chemistry
+306,Free Energy and Cell Potential,ΔG = -nFE,The relationship between Gibbs free energy change and cell potential.,Formula,Chemistry
+307,Molarity,M = n/V,The number of moles of solute per liter of solution.,Formula,Chemistry
+308,Molality,m = n_solute / m_solvent (kg),The number of moles of solute per kilogram of solvent.,Formula,Chemistry
+309,Mole Fraction,X_A = n_A / (n_A + n_B + ...),The ratio of the number of moles of a component to the total number of moles in the mixture.,Formula,Chemistry
+310,Percent Composition,% = (mass of element / mass of compound) × 100,The percentage by mass of each element in a compound.,Formula,Chemistry
+311,Empirical Formula,Simplest whole number ratio of atoms,"The simplest ratio of elements in a compound, determined from percent composition.",Formula,Chemistry
+312,Molecular Formula,Molecular formula = (Empirical formula) × n,"The actual number of atoms of each element in a molecule, a multiple of the empirical formula.",Formula,Chemistry
+313,Stoichiometry,Based on balanced chemical equation coefficients,The quantitative relationship between reactants and products in a chemical reaction.,Principle,Chemistry
+314,Limiting Reactant,The reactant that is completely consumed first,The reactant that determines the maximum amount of product that can be formed in a reaction.,Concept,Chemistry
+315,Theoretical Yield,Based on limiting reactant and stoichiometry,The maximum amount of product that can be obtained from a reaction under ideal conditions.,Concept,Chemistry
+316,Percent Yield,% Yield = (Actual yield / Theoretical yield) × 100,"The ratio of actual yield to theoretical yield, expressed as a percentage.",Formula,Chemistry
+317,Beer-Lambert Law,A = εlc,The absorbance of light is proportional to the concentration and path length of the absorbing species.,Law,Chemistry
+318,Planck's Constant,h = 6.626 × 10⁻³⁴ J·s,The fundamental constant relating the energy of a photon to its frequency.,Constant,Chemistry
+319,Rydberg Formula,1/λ = R(1/n₁² - 1/n₂²),Calculates the wavelength of light emitted or absorbed when an electron transitions between energy levels.,Formula,Chemistry
+320,de Broglie Wavelength (Chemistry),λ = h/(mv),"All matter exhibits wave-like properties, with wavelength inversely proportional to momentum.",Principle,Chemistry
+321,Heisenberg Uncertainty Principle (Chemistry),Δx·Δp ≥ h/(4π),It is impossible to simultaneously know the exact position and momentum of an electron.,Principle,Chemistry
+322,Aufbau Principle,Electrons fill orbitals from lowest to highest energy,Electrons are added to atomic orbitals starting with the lowest energy level.,Principle,Chemistry
+323,Hund's Rule,Electrons fill degenerate orbitals singly before pairing,"When filling orbitals of equal energy, electrons occupy separate orbitals with parallel spins before pairing.",Rule,Chemistry
+324,Pauli Exclusion Principle (Chemistry),No two electrons can have the same set of four quantum numbers,Each electron in an atom must have a unique set of quantum numbers.,Principle,Chemistry
+325,Bohr Model Energy Levels,E_n = -13.6/n² eV,The energy of an electron in the nth energy level of a hydrogen atom.,Formula,Chemistry
+326,Ideal Gas Constant,R = 0.0821 L·atm/(mol·K) = 8.314 J/(mol·K),"The proportionality constant in the ideal gas law, relating pressure, volume, temperature, and moles.",Constant,Chemistry
+327,Van der Waals Equation,(P + a(n/V)²)(V - nb) = nRT,Modified ideal gas law accounting for molecular size and intermolecular forces.,Equation,Chemistry
+328,Dalton's Law,P_total = P₁ + P₂ + P₃ + ...,The total pressure of a gas mixture equals the sum of partial pressures of individual gases.,Law,Chemistry
+329,Gay-Lussac's Law,P/T = constant (at constant V),The pressure of a gas is directly proportional to its absolute temperature at constant volume.,Law,Chemistry
+330,Avogadro's Number,N_A = 6.022 × 10²³ particles/mol,"The number of atoms, molecules, or ions in one mole of a substance.",Constant,Chemistry
+331,Molar Mass,M = m/n,"The mass of one mole of a substance, equal to mass divided by number of moles.",Formula,Chemistry
+332,Density,ρ = m/V,The mass per unit volume of a substance.,Formula,Chemistry
+333,Concentration (Molarity),M = n/V,The number of moles of solute per liter of solution.,Formula,Chemistry
+334,Dilution Formula,M₁V₁ = M₂V₂,The relationship between concentrations and volumes before and after dilution.,Formula,Chemistry
+335,Mass Percent,% = (mass solute / mass solution) × 100,The percentage by mass of solute in a solution.,Formula,Chemistry
+336,Parts Per Million,ppm = (mass solute / mass solution) × 10⁶,The concentration expressed as parts per million.,Formula,Chemistry
+337,Colligative Properties - Boiling Point Elevation,ΔT_b = K_b × m,The increase in boiling point is proportional to molality of solute particles.,Formula,Chemistry
+338,Colligative Properties - Freezing Point Depression,ΔT_f = K_f × m,The decrease in freezing point is proportional to molality of solute particles.,Formula,Chemistry
+339,Osmotic Pressure,π = MRT,"The pressure required to prevent osmosis, proportional to molarity and temperature.",Formula,Chemistry
+340,Van't Hoff Factor,i = actual particles / formula units,The number of particles a compound dissociates into in solution.,Formula,Chemistry
+341,Reaction Rate,Rate = -Δ[A]/Δt = Δ[P]/Δt,The change in concentration of reactants or products per unit time.,Formula,Chemistry
+342,Rate Constant,k = rate / [A]^m[B]^n,"The proportionality constant in the rate law, temperature-dependent.",Constant,Chemistry
+343,Reaction Order,Overall order = m + n,"The sum of exponents in the rate law, determining how concentration affects rate.",Concept,Chemistry
+344,Half-Life (First Order),t₁/₂ = ln(2)/k = 0.693/k,The time required for half of reactant to be consumed in a first-order reaction.,Formula,Chemistry
+345,Half-Life (Second Order),t₁/₂ = 1/(k[A]₀),The time required for half of reactant to be consumed in a second-order reaction.,Formula,Chemistry
+346,Activation Energy,E_a = energy barrier for reaction,The minimum energy required for reactants to form products.,Concept,Chemistry
+347,Catalyst Effect,"Lowers activation energy, increases rate",Catalysts speed up reactions by providing alternative pathway with lower activation energy.,Principle,Chemistry
+348,Reaction Quotient,Q = [C]^c[D]^d / [A]^a[B]^b,The ratio of product to reactant concentrations at any point in reaction.,Formula,Chemistry
+349,Equilibrium Constant from ΔG,K = e^(-ΔG°/RT),The relationship between standard free energy change and equilibrium constant.,Formula,Chemistry
+350,Reaction Direction Prediction,"If Q < K, forward; Q > K, reverse; Q = K, equilibrium",Comparison of reaction quotient to equilibrium constant predicts reaction direction.,Principle,Chemistry
+351,Common Ion Effect,Adding common ion decreases solubility,The solubility of a salt decreases when a common ion is added to the solution.,Principle,Chemistry
+352,Solubility Product Constant,K_sp = [A⁺]^m[B⁻]^n,The equilibrium constant for dissolution of a sparingly soluble salt.,Constant,Chemistry
+353,Ion Product,IP = [A⁺]^m[B⁻]^n,The product of ion concentrations raised to their stoichiometric coefficients.,Formula,Chemistry
+354,Precipitation Prediction,"If IP > K_sp, precipitate forms",Comparison of ion product to solubility product predicts precipitation.,Principle,Chemistry
+355,Bronsted-Lowry Acid,HA → H⁺ + A⁻,A substance that donates protons (H⁺ ions) in aqueous solution.,Definition,Chemistry
+356,Bronsted-Lowry Base,B + H⁺ → BH⁺,A substance that accepts protons (H⁺ ions) in aqueous solution.,Definition,Chemistry
+357,Conjugate Acid-Base Pair,HA/A⁻ or BH⁺/B,"Two species differing by one proton; when acid loses H⁺, it becomes conjugate base.",Concept,Chemistry
+358,Autoionization of Water,H₂O ⇌ H⁺ + OH⁻,"Water molecules can act as both acid and base, producing hydronium and hydroxide ions.",Principle,Chemistry
+359,pKa,pKa = -log(Ka),"The negative logarithm of acid dissociation constant, indicating acid strength.",Formula,Chemistry
+360,pKb,pKb = -log(Kb),"The negative logarithm of base dissociation constant, indicating base strength.",Formula,Chemistry
+361,Relationship Between Ka and Kb,Ka × Kb = Kw,"For a conjugate acid-base pair, the product of Ka and Kb equals Kw.",Formula,Chemistry
+362,Buffer Capacity,Maximum resistance to pH change,"The ability of a buffer to resist pH changes, greatest when pH = pKa.",Concept,Chemistry
+363,Buffer Range,pH = pKa ± 1,"The effective pH range of a buffer, typically within one pH unit of pKa.",Formula,Chemistry
+364,Titration Equivalence Point,Moles acid = Moles base,The point in titration where stoichiometrically equivalent amounts of acid and base have reacted.,Concept,Chemistry
+365,Titration End Point,Indicator color change,"The point where indicator changes color, ideally matching equivalence point.",Concept,Chemistry
+366,Redox Reaction,Oxidation + Reduction,A reaction involving transfer of electrons from one species to another.,Concept,Chemistry
+367,Oxidation Number Rules,Sum of oxidation numbers = charge,"Rules for assigning oxidation numbers: elements = 0, monatomic ions = charge, etc.",Rule,Chemistry
+368,Balancing Redox Reactions,"Balance atoms, then electrons",Method for balancing redox reactions using half-reactions and electron transfer.,Method,Chemistry
+369,Standard Reduction Potential,E° = tendency to gain electrons,The tendency of a species to gain electrons under standard conditions.,Concept,Chemistry
+370,Cell Potential,E°_cell = E°_cathode - E°_anode,The potential difference between cathode and anode in an electrochemical cell.,Formula,Chemistry
+371,Spontaneity from E°,"If E°_cell > 0, reaction is spontaneous",A positive cell potential indicates a spontaneous redox reaction.,Principle,Chemistry
+372,Free Energy from Cell Potential,ΔG° = -nFE°,The relationship between standard free energy change and standard cell potential.,Formula,Chemistry
+373,Faraday Constant,"F = 96,485 C/mol","The charge of one mole of electrons, used in electrochemical calculations.",Constant,Chemistry
+374,Electrolysis - Moles from Charge,n = Q/(n_e × F),The number of moles produced in electrolysis from charge passed and electrons per mole.,Formula,Chemistry
+375,Bond Energy,Energy to break one mole of bonds,"The energy required to break a chemical bond, typically in kJ/mol.",Concept,Chemistry
+376,Bond Length,Distance between bonded nuclei,The average distance between nuclei of two bonded atoms.,Concept,Chemistry
+377,Bond Order,Number of electron pairs between atoms,"The number of chemical bonds between two atoms: single = 1, double = 2, triple = 3.",Concept,Chemistry
+378,Hybridization,"sp, sp², sp³, sp³d, sp³d²",The mixing of atomic orbitals to form hybrid orbitals for bonding.,Concept,Chemistry
+379,VSEPR Theory,"Electron pairs repel, minimize repulsion",Valence shell electron pair repulsion theory predicts molecular geometry.,Theory,Chemistry
+380,Molecular Geometry,Based on number of electron domains,"The three-dimensional arrangement of atoms in a molecule, predicted by VSEPR theory.",Concept,Chemistry
+381,Dipole Moment,μ = q × d,"The measure of molecular polarity, product of charge and distance.",Formula,Chemistry
+382,Intermolecular Forces,"London, dipole-dipole, hydrogen bonding","Forces between molecules: dispersion forces, dipole interactions, and hydrogen bonds.",Concept,Chemistry
+383,Hydrogen Bonding,"H bonded to N, O, or F",Strong dipole-dipole interaction when hydrogen is bonded to highly electronegative atoms.,Concept,Chemistry
+384,London Dispersion Forces,Temporary dipoles from electron movement,Weak intermolecular forces from temporary charge separation due to electron motion.,Concept,Chemistry
+385,Crystal Lattice Energy,Energy to separate ions to infinity,The energy required to completely separate one mole of solid ionic compound into gaseous ions.,Concept,Chemistry
+386,Born-Haber Cycle,Sum of energy changes = lattice energy,A thermodynamic cycle relating lattice energy to other energy changes in ionic compound formation.,Method,Chemistry
+387,Coordination Number,Number of ligands bonded to central atom,"The number of atoms, ions, or molecules bonded to the central atom in a complex.",Concept,Chemistry
+388,Crystal Field Theory,Ligands split d-orbital energies,Theory explaining color and magnetic properties of transition metal complexes.,Theory,Chemistry
+389,Spectrochemical Series,I⁻ < Br⁻ < Cl⁻ < F⁻ < OH⁻ < ... < CN⁻,Ordering of ligands by their ability to split d-orbital energy levels.,Principle,Chemistry
+390,Isomerism,"Same formula, different structure",Compounds with same molecular formula but different arrangements of atoms.,Concept,Chemistry
+391,Stereoisomers,"Same connectivity, different spatial arrangement",Isomers with same atom connectivity but different three-dimensional orientations.,Concept,Chemistry
+392,Enantiomers,Mirror image stereoisomers,Stereoisomers that are non-superimposable mirror images of each other.,Concept,Chemistry
+393,Diastereomers,Non-mirror image stereoisomers,Stereoisomers that are not mirror images of each other.,Concept,Chemistry
+394,Optical Activity,Ability to rotate plane-polarized light,The property of chiral molecules to rotate the plane of polarized light.,Concept,Chemistry
+395,Specific Rotation,[α] = α/(l × c),The rotation of plane-polarized light per unit path length and concentration.,Formula,Chemistry
+396,R/S Nomenclature,Priority rules for chiral centers,System for naming enantiomers based on spatial arrangement of substituents.,Rule,Chemistry
+397,E/Z Nomenclature,Priority rules for double bonds,System for naming geometric isomers around double bonds.,Rule,Chemistry
+398,Nucleophilic Substitution,Nu⁻ + R-X → R-Nu + X⁻,Reaction where nucleophile replaces leaving group in organic molecule.,Reaction,Chemistry
+399,SN1 Mechanism,"Unimolecular, two-step, carbocation intermediate",Substitution mechanism involving rate-determining formation of carbocation.,Mechanism,Chemistry
+400,SN2 Mechanism,"Bimolecular, one-step, inversion of configuration",Substitution mechanism involving simultaneous bond breaking and formation.,Mechanism,Chemistry
+401,Elimination Reaction,E1 or E2 mechanism,Reaction removing atoms or groups to form double or triple bonds.,Reaction,Chemistry
+402,Markovnikov's Rule,H adds to carbon with more H's,"In addition to alkenes, hydrogen adds to carbon with more hydrogens.",Rule,Chemistry
+403,Zaitsev's Rule,Most substituted alkene is major product,"In elimination reactions, the most stable (most substituted) alkene is favored.",Rule,Chemistry
+404,Aromaticity,"4n + 2 π electrons, planar, cyclic",Special stability of cyclic conjugated systems meeting Hückel's rule.,Concept,Chemistry
+405,Hückel's Rule,4n + 2 π electrons for aromaticity,Aromatic compounds have 4n+2 delocalized π electrons in a planar ring.,Rule,Chemistry
+406,Electrophilic Aromatic Substitution,E⁺ + Ar-H → Ar-E + H⁺,Reaction where electrophile replaces hydrogen on aromatic ring.,Reaction,Chemistry
+407,Directing Effects,Ortho/para vs meta directors,Substituents on benzene ring direct incoming groups to specific positions.,Principle,Chemistry
+408,Aldol Condensation,Carbonyl + enolate → β-hydroxy carbonyl,Reaction between carbonyl compounds forming carbon-carbon bonds.,Reaction,Chemistry
+409,Grignard Reaction,R-Mg-X + C=O → R-C-OH,Reaction of Grignard reagents with carbonyl compounds to form alcohols.,Reaction,Chemistry
+410,Diels-Alder Reaction,Diene + Dienophile → Cyclohexene,Cycloaddition reaction between conjugated diene and alkene to form six-membered ring.,Reaction,Chemistry
+411,Wittig Reaction,Carbonyl + Phosphorus ylide → Alkene,Reaction converting carbonyl groups to alkenes using phosphorus ylides.,Reaction,Chemistry
+412,Retrosynthetic Analysis,Working backwards from target molecule,Strategy for planning organic synthesis by breaking bonds in target molecule.,Method,Chemistry
+413,Protecting Groups,Temporarily block reactive functional groups,Groups used to protect reactive sites during multi-step synthesis.,Concept,Chemistry
+414,Green Chemistry Principles,12 principles for sustainable chemistry,Guidelines for designing chemical processes that minimize environmental impact.,Principle,Chemistry
+415,Atom Economy,% = (MW of desired product / MW of all reactants) × 100,The percentage of reactant atoms incorporated into the final product.,Formula,Chemistry
+416,E-Factor,E = mass waste / mass product,Environmental factor measuring waste generated per unit of product.,Formula,Chemistry

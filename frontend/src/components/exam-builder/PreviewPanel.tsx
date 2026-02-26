@@ -3,6 +3,8 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { FileText, Image, Atom, CheckCircle2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MathText } from '@/components/ui/MathText';
+import { RichContentViewer } from '@/components/exam-taker/RichContentViewer';
 import type { Question } from './QuestionBuilder';
 
 interface PreviewPanelProps {
@@ -34,10 +36,10 @@ export function PreviewPanel({ questions, activeQuestionId }: PreviewPanelProps)
 
         {/* Question Text */}
         <div className="text-sm">
-          {question.text ? (
-            <div className="prose prose-sm max-w-none">
-              {question.text}
-            </div>
+          {question.richContent ? (
+            <RichContentViewer content={question.richContent} />
+          ) : question.text ? (
+            <MathText text={question.text} className="prose prose-sm max-w-none" />
           ) : (
             <p className="text-muted-foreground italic">(No question text)</p>
           )}
@@ -88,9 +90,20 @@ export function PreviewPanel({ questions, activeQuestionId }: PreviewPanelProps)
                 Solution: {question.goldSolutionSteps.length} steps
               </span>
             </div>
-            {question.finalAnswer && (
+            {(question.finalAnswer || question.finalAnswerLatex) && (
               <p className="text-green-800">
-                Final Answer: <strong>{question.finalAnswer}</strong>
+                Final Answer:{' '}
+                <strong>
+                  {question.finalAnswerLatex ? (
+                    <MathText
+                      text={question.finalAnswerLatex.includes('$')
+                        ? question.finalAnswerLatex
+                        : `$$${question.finalAnswerLatex}$$`}
+                    />
+                  ) : (
+                    <MathText text={question.finalAnswer} />
+                  )}
+                </strong>
               </p>
             )}
           </div>

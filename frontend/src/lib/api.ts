@@ -217,13 +217,12 @@ export const examsAPI = {
     });
   },
 
-  async downloadPDF(examId: string) {
+  async downloadPDF(examId: string, includeSolutions: boolean = false) {
     const token = getAuthToken();
-    const response = await fetch(`${API_BASE_URL}/exams/${examId}/download`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+    const response = await fetch(
+      `${API_BASE_URL}/exams/${examId}/download?include_solutions=${includeSolutions}&t=${Date.now()}`,
+      { headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } }
+    );
     if (!response.ok) throw new Error('Failed to download PDF');
     return response.blob();
   },

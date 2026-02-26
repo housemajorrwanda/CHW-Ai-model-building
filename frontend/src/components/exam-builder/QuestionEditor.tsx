@@ -5,6 +5,15 @@ import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import { Image } from '@tiptap/extension-image';
+import Underline from '@tiptap/extension-underline';
+import TextAlign from '@tiptap/extension-text-align';
+import Highlight from '@tiptap/extension-highlight';
+import { TextStyle } from '@tiptap/extension-text-style';
+import { Color } from '@tiptap/extension-color';
+import Link from '@tiptap/extension-link';
+import CharacterCount from '@tiptap/extension-character-count';
+import { Superscript } from '@tiptap/extension-superscript';
+import { Subscript } from '@tiptap/extension-subscript';
 import { ShapeExtension } from './extensions/ShapeExtension';
 import { GraphExtension } from './extensions/GraphExtension';
 import { Mathematics, migrateMathStrings } from '@tiptap/extension-mathematics';
@@ -36,40 +45,36 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({
-        // Allow HTML content
-      }),
+      StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+      Underline,
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      Highlight.configure({ multicolor: false }),
+      TextStyle,
+      Color,
+      Link.configure({ openOnClick: false, HTMLAttributes: { class: 'text-primary underline cursor-pointer' } }),
+      CharacterCount,
+      Superscript,
+      Subscript,
       Table.configure({
         resizable: true,
-        HTMLAttributes: {
-          class: 'border-collapse border border-gray-300',
-        },
+        HTMLAttributes: { class: 'border-collapse border border-gray-300' },
       }),
       TableRow,
       TableHeader,
       TableCell.extend({
         addAttributes() {
-          return {
-            ...this.parent?.(),
-            class: {
-              default: 'border border-gray-300 px-3 py-2',
-            },
-          };
+          return { ...this.parent?.(), class: { default: 'border border-gray-300 px-3 py-2' } };
         },
       }),
       Image.configure({
-        HTMLAttributes: {
-          class: 'max-w-full rounded-lg cursor-pointer',
-        },
+        HTMLAttributes: { class: 'max-w-full rounded-lg cursor-pointer' },
         inline: false,
         allowBase64: true,
       }),
       ShapeExtension,
       GraphExtension,
       Mathematics,
-      Placeholder.configure({
-        placeholder: 'Enter your question here...',
-      }),
+      Placeholder.configure({ placeholder: 'Write your question here…' }),
     ],
     content: question.richContent || question.text || '',
     onUpdate: ({ editor }) => {
@@ -83,13 +88,26 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       attributes: {
         class: 'prose prose-sm sm:prose lg:prose-lg xl:prose-xl mx-auto focus:outline-none',
       },
+      // Normalise LaTeX delimiters on plain-text paste so migrateMathStrings can convert them
+      transformPastedText: (text: string) =>
+        text
+          .replace(/\\\(([\s\S]*?)\\\)/g, (_: string, m: string) => `$${m}$`)
+          .replace(/\\\[([\s\S]*?)\\\]/g, (_: string, m: string) => `$$${m}$$`),
     },
     immediatelyRender: false,
     onCreate: ({ editor }) => {
-      // Convert any raw $$...$$ / $...$ strings to proper math nodes on load
       migrateMathStrings(editor);
     },
   });
+
+  // After any paste event, convert $...$ text to proper math nodes
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const onPaste = () => setTimeout(() => migrateMathStrings(editor), 80);
+    dom.addEventListener('paste', onPaste);
+    return () => dom.removeEventListener('paste', onPaste);
+  }, [editor]);
 
   // Update editor content when question changes
   useEffect(() => {
@@ -169,8 +187,14 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
           <ToolbarPanel editor={editor} question={question} onUpdate={onUpdate} />
 
           {/* Editor Area */}
-          <div ref={editorRef} className="border rounded-lg p-4 min-h-[200px] prose max-w-none focus-within:ring-2 focus-within:ring-primary/20">
-            <EditorContent editor={editor} />
+          <div ref={editorRef} className="border rounded-lg min-h-[200px] focus-within:ring-2 focus-within:ring-primary/20 overflow-hidden">
+            <EditorContent editor={editor} className="p-4 prose prose-sm max-w-none" />
+            {editor && (
+              <div className="px-3 py-1.5 border-t bg-muted/30 flex items-center justify-end gap-3 text-xs text-muted-foreground">
+                <span>{editor.storage.characterCount?.words?.() ?? 0} words</span>
+                <span>{editor.storage.characterCount?.characters?.() ?? 0} chars</span>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

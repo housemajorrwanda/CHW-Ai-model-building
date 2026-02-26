@@ -1500,7 +1500,42 @@ def update_exam(
     total_points = sum(q.points for q in exam_data.questions)
     exam.total_points = total_points
     
-    # Delete existing questions (cascade will delete gold steps, attachments, embedded_content)
+    # ── Before cascade-deleting questions, protect attachments referenced by image
+    # nodes inside rich content (otherwise the cascade wipes them and their files
+    # become un-findable when the PDF is generated later). ──────────────────────
+    import re as _re_att
+    _protected_att_paths: dict[str, str] = {}  # {att_id: file_path}
+
+    def _collect_rich_image_att_ids(node) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "image":
+            src = node.get("attrs", {}).get("src", "")
+            m = _re_att.search(r'/api/attachments/([^/]+)/file', src)
+            if m:
+                _protected_att_paths[m.group(1)] = ""  # value filled below
+        for child in node.get("content") or []:
+            _collect_rich_image_att_ids(child)
+
+    for _q in exam.questions:
+        if _q.rich_content:
+            try:
+                _rc = json.loads(_q.rich_content) if isinstance(_q.rich_content, str) else _q.rich_content
+                _collect_rich_image_att_ids(_rc)
+            except Exception:
+                pass
+
+    # Unlink protected attachments from their question so they survive cascade-delete
+    for _att_id in list(_protected_att_paths.keys()):
+        _att = db.query(models.QuestionAttachment).filter(
+            models.QuestionAttachment.id == _att_id
+        ).first()
+        if _att:
+            _protected_att_paths[_att_id] = _att.file_path  # remember where the file lives
+            _att.question_id = ""  # detach → won't be cascade-deleted
+    db.flush()
+
+    # Delete existing questions (cascade will delete gold steps, non-protected attachments, embedded_content)
     for question in exam.questions:
         db.delete(question)
     db.flush()
@@ -1524,7 +1559,18 @@ def update_exam(
         )
         db.add(new_question)
         db.flush()
-        
+
+        # Re-link any protected (rich-content) attachments whose IDs appear in this question
+        if question_data.richContent:
+            _qrc = json.dumps(question_data.richContent) if isinstance(question_data.richContent, dict) else question_data.richContent
+            for _pid, _ppath in list(_protected_att_paths.items()):
+                if _pid in (_qrc or "") and _ppath:
+                    _patt = db.query(models.QuestionAttachment).filter(
+                        models.QuestionAttachment.id == _pid
+                    ).first()
+                    if _patt:
+                        _patt.question_id = new_question.id
+
         # Handle attachments - move from temp location to question folder
         for att_data in question_data.attachments:
             if att_data.filePath.startswith("/api/attachments/"):
@@ -3144,6 +3190,392 @@ def _pdf_safe_text(s) -> str:
     return result
 
 
+def _build_question_tree(questions):
+    """
+    Given a flat list of Question ORM objects, return a list of
+    (top_question, [sub_questions_in_order]) tuples, sorted by question number.
+    Sub-questions are those with a non-None parent_question_id.
+    """
+    top = [q for q in questions if not getattr(q, 'parent_question_id', None)]
+    by_parent = {}
+    for q in questions:
+        pid = getattr(q, 'parent_question_id', None)
+        if pid:
+            by_parent.setdefault(pid, []).append(q)
+    result = []
+    for tq in sorted(top, key=lambda q: getattr(q, 'number', 0)):
+        subs = sorted(by_parent.get(tq.id, []), key=lambda q: getattr(q, 'number', 0))
+        result.append((tq, subs))
+    return result
+
+
+def _rich_content_to_story_elements(rich_content, normal_style, sub_style, inch, upload_dir=None):
+    """
+    Walk TipTap JSON and return a list of ReportLab flowable objects.
+    Handles: paragraphs, headings, bullet/ordered lists, blockquotes,
+             math nodes (inline + block), images (base64 + URL), tables.
+    upload_dir: Path object pointing to the uploads folder on disk (for resolving URLs).
+    """
+    import io as _io, base64 as _b64, json as _json
+    from reportlab.platypus import Paragraph, Spacer, Image as RLImage, Table as RLTable, TableStyle
+    from reportlab.lib import colors as _colors
+    from reportlab.lib.utils import ImageReader
+    from urllib.parse import urlparse as _urlparse
+
+    _PLACEHOLDER_PREFIX = "[Question text could not be displayed"
+
+    if not rich_content:
+        return []
+    if isinstance(rich_content, str):
+        try:
+            rich_content = _json.loads(rich_content)
+        except Exception:
+            return [Paragraph(rich_content[:500], normal_style)]
+
+    def _xs(text: str) -> str:
+        """XML-safe escape for ReportLab Paragraph markup."""
+        return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _inline(node) -> str:
+        """Recursively convert an inline node (text, marks, math) to ReportLab markup string."""
+        if not isinstance(node, dict):
+            return ""
+        ntype = node.get("type", "")
+        if ntype == "text":
+            raw = node.get("text", "")
+            if raw.startswith(_PLACEHOLDER_PREFIX):
+                return ""
+            safe = _xs(raw)
+            for mark in node.get("marks") or []:
+                mt = mark.get("type", "")
+                if mt == "bold":
+                    safe = f"<b>{safe}</b>"
+                elif mt == "italic":
+                    safe = f"<i>{safe}</i>"
+                elif mt == "underline":
+                    safe = f"<u>{safe}</u>"
+                elif mt == "strike":
+                    safe = f"<strike>{safe}</strike>"
+                elif mt == "code":
+                    safe = f"<font face='Courier'>{safe}</font>"
+            return safe
+        if ntype in ("inlineMath", "mathInline"):
+            latex = node.get("attrs", {}).get("latex", "")
+            return f"<i>[{_xs(latex)}]</i>" if latex else ""
+        # Fallback: recurse children as inline
+        return "".join(_inline(c) for c in node.get("content") or [])
+
+    def _image_flowable(src: str):
+        """Turn an image src (base64 data URL or server URL) into an RLImage, or None."""
+        import re as _re_img
+        try:
+            buf = None
+
+            if src.startswith("data:image"):
+                # ── Base64 embedded image ──
+                if "svg" in src[:30].lower():
+                    # ReportLab cannot render SVG natively; skip silently
+                    return None
+                _, data = src.split(",", 1)
+                buf = _io.BytesIO(_b64.b64decode(data))
+
+            else:
+                # ── URL image ──
+                parsed = _urlparse(src)
+                url_path = parsed.path  # e.g. /api/attachments/{id}/file
+
+                local_file = None
+
+                # Pattern 1: /api/attachments/{uuid}/file  →  look up DB to get file_path
+                m = _re_img.search(r'/api/attachments/([^/]+)/file', url_path)
+                if m:
+                    att_id = m.group(1)
+                    try:
+                        from database import SessionLocal as _SL
+                        _db = _SL()
+                        try:
+                            att = _db.query(models.QuestionAttachment).filter(
+                                models.QuestionAttachment.id == att_id
+                            ).first()
+                            if att and att.file_path and upload_dir is not None:
+                                local_file = upload_dir / att.file_path
+                        finally:
+                            _db.close()
+                    except Exception as db_err:
+                        logger.warning(f"PDF: DB lookup failed for attachment {att_id}: {db_err}")
+
+                # Pattern 2: /uploads/... direct path
+                if local_file is None and upload_dir is not None:
+                    uploads_prefix = "/uploads/"
+                    if url_path.startswith(uploads_prefix):
+                        local_file = upload_dir / url_path[len(uploads_prefix):]
+
+                if local_file and local_file.exists():
+                    buf = _io.BytesIO(local_file.read_bytes())
+                else:
+                    logger.warning(f"PDF: cannot resolve image to local file: {src[:80]}")
+                    return None
+
+            if buf is None:
+                return None
+
+            reader = ImageReader(buf)
+            iw, ih = reader.getSize()
+            if iw <= 0 or ih <= 0:
+                return None
+            max_w = 5.2 * inch
+            w = min(max_w, float(iw))
+            h = w * (ih / iw)
+            if h > 5 * inch:
+                h = 5 * inch
+                w = h * (iw / ih)
+            buf.seek(0)
+            return RLImage(buf, width=w, height=h)
+        except Exception as e:
+            logger.warning(f"PDF image skipped ({src[:60]}): {e}")
+            return None
+
+    elements = []
+
+    def process(node):
+        if not isinstance(node, dict):
+            return
+        ntype = node.get("type", "")
+        children = node.get("content") or []
+
+        if ntype in ("doc",):
+            for c in children:
+                process(c)
+
+        elif ntype == "paragraph":
+            markup = "".join(_inline(c) for c in children).strip()
+            if markup and not markup.startswith(_PLACEHOLDER_PREFIX):
+                elements.append(Paragraph(markup, normal_style))
+
+        elif ntype == "heading":
+            markup = "".join(_inline(c) for c in children).strip()
+            if markup:
+                elements.append(Paragraph(f"<b>{markup}</b>", normal_style))
+
+        elif ntype == "bulletList":
+            for item in children:
+                item_markup = "".join(_inline(c) for c in (item.get("content") or [])).strip()
+                if item_markup:
+                    elements.append(Paragraph(f"• {item_markup}", normal_style))
+
+        elif ntype == "orderedList":
+            for idx, item in enumerate(children, 1):
+                item_markup = "".join(_inline(c) for c in (item.get("content") or [])).strip()
+                if item_markup:
+                    elements.append(Paragraph(f"{idx}. {item_markup}", normal_style))
+
+        elif ntype == "blockquote":
+            from reportlab.lib.styles import ParagraphStyle
+            qs = ParagraphStyle('quote', parent=normal_style, leftIndent=18, textColor=_colors.grey)
+            markup = "".join(_inline(c) for c in children).strip()
+            if markup:
+                elements.append(Paragraph(f"<i>{markup}</i>", qs))
+
+        elif ntype == "codeBlock":
+            from reportlab.lib.styles import ParagraphStyle
+            cs = ParagraphStyle('code', parent=sub_style, fontName='Courier', fontSize=8,
+                                backColor=_colors.Color(0.94, 0.94, 0.94))
+            raw = "".join(c.get("text", "") for c in children if c.get("type") == "text")
+            if raw:
+                elements.append(Spacer(1, 0.05 * inch))
+                elements.append(Paragraph(_xs(raw[:1000]), cs))
+                elements.append(Spacer(1, 0.05 * inch))
+
+        elif ntype in ("blockMath", "mathBlock"):
+            latex = node.get("attrs", {}).get("latex", "")
+            if latex:
+                elements.append(Spacer(1, 0.08 * inch))
+                elements.append(Paragraph(f"<i>[ {_xs(latex)} ]</i>", sub_style))
+                elements.append(Spacer(1, 0.08 * inch))
+
+        elif ntype == "image":
+            src = node.get("attrs", {}).get("src", "")
+            if src:
+                img = _image_flowable(src)
+                if img:
+                    elements.append(Spacer(1, 0.1 * inch))
+                    elements.append(img)
+                    elements.append(Spacer(1, 0.1 * inch))
+
+        elif ntype == "table":
+            # Build 2-D list of Paragraph cells
+            tbl_data = []
+            is_first_row = True
+            for row_node in children:
+                row = []
+                for cell_node in row_node.get("content") or []:
+                    markup = "".join(_inline(c) for c in (cell_node.get("content") or [])).strip()
+                    cell_style = sub_style if is_first_row else normal_style
+                    if is_first_row:
+                        markup = f"<b>{markup}</b>"
+                    row.append(Paragraph(markup or " ", cell_style))
+                if row:
+                    tbl_data.append(row)
+                is_first_row = False
+
+            if tbl_data:
+                num_cols = max(len(r) for r in tbl_data)
+                col_w = (5.2 * inch) / num_cols
+                tbl = RLTable(tbl_data, colWidths=[col_w] * num_cols, repeatRows=1)
+                tbl.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), _colors.Color(0.88, 0.88, 0.95)),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 9),
+                    ('GRID', (0, 0), (-1, -1), 0.5, _colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1),
+                     [_colors.white, _colors.Color(0.96, 0.96, 0.96)]),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                    ('TOPPADDING', (0, 0), (-1, -1), 3),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                ]))
+                elements.append(Spacer(1, 0.1 * inch))
+                elements.append(tbl)
+                elements.append(Spacer(1, 0.1 * inch))
+
+        else:
+            # Generic fallback: recurse
+            for c in children:
+                process(c)
+
+    process(rich_content)
+    return elements
+
+
+def _render_question_block(q, story, q_label, normal_style, heading_style, sub_style,
+                            include_solutions, inch, UPLOAD_DIR):
+    """Render one question (or sub-question) block into story."""
+    import re as _re_q, json as _json
+    from reportlab.platypus import Paragraph, Spacer, Image as RLImage
+    from reportlab.lib.utils import ImageReader
+
+    pts = getattr(q, 'points', 0)
+    story.append(Paragraph(f"<b>{q_label} ({pts} pts)</b>", heading_style))
+
+    # ── Question content (rich text: paragraphs, math, images, tables) ──
+    rich = getattr(q, 'rich_content', None)
+    if rich:
+        try:
+            rc = _json.loads(rich) if isinstance(rich, str) else rich
+            rich_elements = _rich_content_to_story_elements(
+                rc, normal_style, sub_style, inch, upload_dir=UPLOAD_DIR
+            )
+            story.extend(rich_elements)
+        except Exception as _e:
+            logger.warning(f"Rich content render error: {_e}")
+            fallback = getattr(q, 'text', '') or ''
+            if fallback:
+                story.append(Paragraph(fallback[:2000], normal_style))
+    else:
+        plain = getattr(q, 'text', '') or ''
+        if plain:
+            story.append(Paragraph(plain[:2000], normal_style))
+
+    # ── File attachments (images stored on disk) ──
+    for att in getattr(q, 'attachments', []) or []:
+        if getattr(att, 'attachment_type', '') != 'image':
+            continue
+        path = UPLOAD_DIR / att.file_path
+        if path.exists():
+            try:
+                reader = ImageReader(str(path))
+                iw, ih = reader.getSize()
+                if iw > 0 and ih > 0:
+                    aspect = ih / float(iw)
+                    max_w = 5.2 * inch
+                    w = max_w
+                    h = w * aspect
+                    if h > 5 * inch:
+                        h = 5 * inch
+                        w = h / aspect
+                    story.append(Spacer(1, 0.1 * inch))
+                    story.append(RLImage(str(path), width=w, height=h))
+                    story.append(Spacer(1, 0.1 * inch))
+            except Exception as e:
+                logger.warning(f'Attachment image skipped: {e}')
+
+    # Answer space
+    story.append(Spacer(1, 0.2 * inch))
+    story.append(Paragraph('<b>Answer:</b>', sub_style))
+    if include_solutions:
+        story.append(Spacer(1, 0.1 * inch))
+        gold_steps = list(getattr(q, 'gold_steps', []) or [])
+        if gold_steps:
+            story.append(Paragraph('<i>Solution (reference):</i>', sub_style))
+            for idx, gs in enumerate(sorted(gold_steps, key=lambda x: getattr(x, 'step_number', 0)), 1):
+                step_text = _pdf_safe_text(_clean_step_for_pdf(gs))
+                if step_text:
+                    story.append(Paragraph(f'{idx}. {step_text}', sub_style))
+            final_lat = getattr(q, 'final_answer_latex', None) or getattr(q, 'final_answer', None)
+            if final_lat and str(final_lat).strip():
+                fa = _re_q.sub(r'\$\$?(.*?)\$\$?', r'\1', str(final_lat), flags=_re_q.DOTALL).strip()
+                if fa:
+                    story.append(Paragraph(f'<b>Final Answer:</b> {_pdf_safe_text(fa)}', sub_style))
+        else:
+            final_ans = getattr(q, 'final_answer_latex', None) or getattr(q, 'final_answer', None)
+            if final_ans and str(final_ans).strip():
+                fa = _re_q.sub(r'\$\$?(.*?)\$\$?', r'\1', str(final_ans), flags=_re_q.DOTALL).strip()
+                story.append(Paragraph(f'<b>Final Answer:</b> {_pdf_safe_text(fa)}', sub_style))
+            else:
+                story.append(Paragraph('<i>No reference solution stored.</i>', sub_style))
+        story.append(Spacer(1, 0.3 * inch))
+    else:
+        dot_line = '_' * 90
+        for _ in range(5):
+            story.append(Paragraph(dot_line, sub_style))
+            story.append(Spacer(1, 0.18 * inch))
+        story.append(Spacer(1, 0.15 * inch))
+
+
+def _clean_step_for_pdf(gs) -> str:
+    """Return human-readable text for a gold solution step in PDF.
+    Prefers the latex field, strips $/$$ delimiters, falls back to expression.
+    Also strips any leading 'Step N:' prefix to avoid duplication with the outer label."""
+    import re as _re
+    latex = (getattr(gs, "latex", "") or "").strip()
+    expression = (getattr(gs, "expression", "") or "").strip()
+    desc = (getattr(gs, "description", "") or "").strip()
+
+    def strip_delims(text: str) -> str:
+        text = _re.sub(r'^\$\$', '', text)
+        text = _re.sub(r'\$\$$', '', text)
+        text = _re.sub(r'^\$', '', text)
+        text = _re.sub(r'\$$', '', text)
+        text = _re.sub(r'\$\$(.*?)\$\$', r'\1', text, flags=_re.DOTALL)
+        text = _re.sub(r'\$(.*?)\$', r'\1', text)
+        return text.strip()
+
+    def strip_step_prefix(text: str) -> str:
+        """Remove 'Step N', 'Step N:', 'Step N.' prefixes stored by the UI."""
+        # Standalone "Step N" with nothing after = whole string is the prefix
+        cleaned = _re.sub(r'^Step\s*\d+\s*$', '', text, flags=_re.IGNORECASE).strip()
+        # "Step N: content" or "Step N. content" → "content"
+        cleaned = _re.sub(r'^Step\s*\d+\s*[:.]\s*', '', cleaned, flags=_re.IGNORECASE).strip()
+        return cleaned
+
+    desc = strip_step_prefix(desc)
+
+    if latex:
+        content = strip_delims(latex)
+    elif expression:
+        content = strip_step_prefix(strip_delims(expression))
+    else:
+        content = ""
+
+    if desc and content and desc.lower() not in ('solution', 'answer', ''):
+        return f"{desc}: {content}"
+    # If desc is generic ("Solution") and we have real content, prefer content
+    if content and desc.lower() in ('solution', 'answer'):
+        return content
+    return desc or content
+
+
 def _normalize_text_for_storage(s) -> str:
     """Normalize encoding for storing in DB. Does NOT replace content with placeholder (use only when saving)."""
     if s is None:
@@ -3223,10 +3655,11 @@ def _display_safe_text(s) -> str:
 @app.get("/api/exams/{exam_id}/download")
 async def download_exam_pdf(
     exam_id: str,
+    include_solutions: bool = False,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Download exam as PDF"""
+    """Download exam as PDF. include_solutions=true appends gold solution steps."""
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -3290,9 +3723,25 @@ async def download_exam_pdf(
         spaceAfter=12,
     )
     normal_style = styles["Normal"]
-    
+    banner_style = ParagraphStyle(
+        'Banner',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor='white',
+        backColor=(0.2, 0.5, 0.2) if include_solutions else (0.2, 0.35, 0.65),
+        borderPadding=6,
+        spaceAfter=12,
+        alignment=TA_CENTER,
+    )
+
     story = []
-    
+
+    if include_solutions:
+        story.append(Paragraph("PROFESSOR COPY — Includes Reference Solutions", banner_style))
+    else:
+        story.append(Paragraph("STUDENT COPY — Questions Only", banner_style))
+    story.append(Spacer(1, 0.1*inch))
+
     story.append(Paragraph(_pdf_safe_text(exam.title), title_style))
     story.append(Spacer(1, 0.2*inch))
     
@@ -3305,82 +3754,32 @@ async def download_exam_pdf(
     story.append(Paragraph(f"<b>Total Points:</b> {exam.total_points}", normal_style))
     story.append(Spacer(1, 0.4*inch))
     
+    sub_style = ParagraphStyle('SubQ', parent=normal_style, leftIndent=24, spaceAfter=2)
+    sub_heading = ParagraphStyle('SubQH', parent=heading_style, leftIndent=24, fontSize=11)
+
     if not exam.questions:
         story.append(Paragraph("No questions available.", normal_style))
     else:
-        for question in sorted(exam.questions, key=lambda q: q.number):
-            story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
+        alphabet = 'abcdefghijklmnopqrstuvwxyz'
+        tree = _build_question_tree(exam.questions)
+        for q_num, (top_q, subs) in enumerate(tree, 1):
+            _render_question_block(
+                top_q, story,
+                q_label=f"Question {q_num}",
+                normal_style=normal_style, heading_style=heading_style, sub_style=normal_style,
+                include_solutions=include_solutions, inch=inch, UPLOAD_DIR=UPLOAD_DIR
+            )
+            # Sub-questions indented with letter labels
+            for s_num, sub_q in enumerate(subs):
+                letter = alphabet[s_num] if s_num < len(alphabet) else str(s_num + 1)
+                _render_question_block(
+                    sub_q, story,
+                    q_label=f"({letter})",
+                    normal_style=sub_style, heading_style=sub_heading, sub_style=sub_style,
+                    include_solutions=include_solutions, inch=inch, UPLOAD_DIR=UPLOAD_DIR
+                )
+            story.append(Spacer(1, 0.3 * inch))
 
-            rich = getattr(question, "rich_content", None)
-            if rich:
-                try:
-                    import json as _json
-                    rc = _json.loads(rich) if isinstance(rich, str) else rich
-                    question_text = _extract_text_from_rich_content(rc)
-                except Exception:
-                    question_text = question.text or ""
-            else:
-                question_text = question.text or ""
-
-            if question_text:
-                for line in question_text.split("\n"):
-                    line = line.strip()
-                    # Skip injected placeholder lines
-                    if line and not line.startswith("[Question text could not be displayed"):
-                        story.append(Paragraph(_pdf_safe_text(line), normal_style))
-
-            for att in getattr(question, "attachments", []) or []:
-                if getattr(att, "attachment_type", "") != "image":
-                    continue
-                path = UPLOAD_DIR / att.file_path
-                if path.exists():
-                    add_image_to_story(path, story)
-            for ec in getattr(question, "embedded_content", []) or []:
-                ct = getattr(ec, "content_type", "") or ""
-                content_data = getattr(ec, "content_data", None)
-                if ct == "table" and content_data:
-                    try:
-                        import json
-                        data = json.loads(content_data) if isinstance(content_data, str) else content_data
-                        raw_rows = data.get("rows") or data.get("data") or []
-                        if raw_rows:
-                            rows = [[str(c) for c in (row if isinstance(row, (list, tuple)) else [row])] for row in raw_rows]
-                            table = RLTable(rows)
-                            table.setStyle(TableStyle([
-                                ("BACKGROUND", (0, 0), (-1, 0), (0.8, 0.8, 0.8)),
-                                ("TEXTCOLOR", (0, 0), (-1, 0), (0, 0, 0)),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                                ("GRID", (0, 0), (-1, -1), 0.5, (0.5, 0.5, 0.5)),
-                                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                            ]))
-                            story.append(Spacer(1, 0.2*inch))
-                            story.append(table)
-                            story.append(Spacer(1, 0.2*inch))
-                    except Exception as e:
-                        logger.warning(f"Could not add table to PDF: {e}")
-            story.append(Spacer(1, 0.3*inch))
-            story.append(Paragraph("Answer:", normal_style))
-            story.append(Spacer(1, 0.5*inch))
-            gold_steps = list(getattr(question, "gold_steps", []) or [])
-            if gold_steps:
-                story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
-                for gs in sorted(gold_steps, key=lambda x: getattr(x, "step_number", 0)):
-                    step_text = _pdf_safe_text(getattr(gs, "expression", "") or getattr(gs, "latex", "") or "")
-                    if step_text:
-                        story.append(Paragraph(f"Step {getattr(gs, 'step_number', 0)}: {step_text}", normal_style))
-                story.append(Spacer(1, 0.4*inch))
-            else:
-                final_ans = getattr(question, "final_answer", None) or getattr(question, "final_answer_latex", None)
-                if final_ans and str(final_ans).strip():
-                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
-                    story.append(Paragraph(_pdf_safe_text(str(final_ans).strip()), normal_style))
-                    story.append(Spacer(1, 0.4*inch))
-                else:
-                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
-                    story.append(Paragraph("<i>No reference solution stored for this question.</i>", normal_style))
-                    story.append(Spacer(1, 0.4*inch))
-    
     try:
         doc.build(story)
         buffer.seek(0)
@@ -3392,20 +3791,27 @@ async def download_exam_pdf(
     safe_filename = _pdf_safe_text(exam.title).replace(" ", "_").replace("/", "_").replace("\\", "_")[:100]
     if not safe_filename:
         safe_filename = "exam"
+    suffix = "_with_solutions" if include_solutions else "_questions_only"
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={safe_filename}.pdf"}
+        headers={
+            "Content-Disposition": f"attachment; filename={safe_filename}{suffix}.pdf",
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        }
     )
 
 
 @app.get("/api/exams/{exam_id}/view-pdf")
 async def view_exam_pdf(
     exam_id: str,
+    include_solutions: bool = False,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """View/download exam PDF - available to both teachers and students"""
+    """View/download exam PDF - available to both teachers and students.
+    include_solutions=true appends gold solution steps and final answers."""
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -3452,7 +3858,17 @@ async def view_exam_pdf(
         spaceAfter=12,
     )
     normal_style = styles["Normal"]
-    
+    banner_style_v = ParagraphStyle(
+        'BannerV',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor='white',
+        backColor=(0.2, 0.5, 0.2) if include_solutions else (0.2, 0.35, 0.65),
+        borderPadding=6,
+        spaceAfter=12,
+        alignment=TA_CENTER,
+    )
+
     def add_image_to_story_v(path, story, max_w=6.5*inch, max_h=8*inch):
         try:
             reader = ImageReader(str(path))
@@ -3470,8 +3886,13 @@ async def view_exam_pdf(
             story.append(Spacer(1, 0.15*inch))
         except Exception as e:
             logger.warning(f"Could not add image to PDF: {e}")
-    
+
     story = []
+    if include_solutions:
+        story.append(Paragraph("PROFESSOR COPY — Includes Reference Solutions", banner_style_v))
+    else:
+        story.append(Paragraph("STUDENT COPY — Questions Only", banner_style_v))
+    story.append(Spacer(1, 0.1*inch))
     story.append(Paragraph(_pdf_safe_text(exam.title), title_style))
     story.append(Spacer(1, 0.2*inch))
     
@@ -3484,67 +3905,31 @@ async def view_exam_pdf(
     story.append(Paragraph(f"<b>Total Points:</b> {exam.total_points}", normal_style))
     story.append(Spacer(1, 0.4*inch))
     
+    sub_style_v = ParagraphStyle('SubQV', parent=normal_style, leftIndent=24, spaceAfter=2)
+    sub_heading_v = ParagraphStyle('SubQHV', parent=heading_style, leftIndent=24, fontSize=11)
+
     if not exam.questions:
         story.append(Paragraph("No questions available.", normal_style))
     else:
-        for question in sorted(exam.questions, key=lambda q: q.number):
-            story.append(Paragraph(f"<b>Question {question.number}</b> ({question.points} points)", heading_style))
-            
-            question_text = question.text or ""
-            if question_text:
-                story.append(Paragraph(_pdf_safe_text(question_text), normal_style))
-            for att in getattr(question, "attachments", []) or []:
-                if getattr(att, "attachment_type", "") != "image":
-                    continue
-                path = UPLOAD_DIR / att.file_path
-                if path.exists():
-                    add_image_to_story_v(path, story)
-            for ec in getattr(question, "embedded_content", []) or []:
-                ct = getattr(ec, "content_type", "") or ""
-                content_data = getattr(ec, "content_data", None)
-                if ct == "table" and content_data:
-                    try:
-                        import json
-                        data = json.loads(content_data) if isinstance(content_data, str) else content_data
-                        raw_rows = data.get("rows") or data.get("data") or []
-                        if raw_rows:
-                            rows = [[str(c) for c in (row if isinstance(row, (list, tuple)) else [row])] for row in raw_rows]
-                            table = RLTable(rows)
-                            table.setStyle(TableStyle([
-                                ("BACKGROUND", (0, 0), (-1, 0), (0.8, 0.8, 0.8)),
-                                ("TEXTCOLOR", (0, 0), (-1, 0), (0, 0, 0)),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                                ("GRID", (0, 0), (-1, -1), 0.5, (0.5, 0.5, 0.5)),
-                                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                            ]))
-                            story.append(Spacer(1, 0.2*inch))
-                            story.append(table)
-                            story.append(Spacer(1, 0.2*inch))
-                    except Exception as e:
-                        logger.warning(f"Could not add table to PDF: {e}")
-            story.append(Spacer(1, 0.3*inch))
-            story.append(Paragraph("Answer:", normal_style))
-            story.append(Spacer(1, 0.5*inch))
-            gold_steps = list(getattr(question, "gold_steps", []) or [])
-            if gold_steps:
-                story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
-                for gs in sorted(gold_steps, key=lambda x: getattr(x, "step_number", 0)):
-                    step_text = _pdf_safe_text(getattr(gs, "expression", "") or getattr(gs, "latex", "") or "")
-                    if step_text:
-                        story.append(Paragraph(f"Step {getattr(gs, 'step_number', 0)}: {step_text}", normal_style))
-                story.append(Spacer(1, 0.4*inch))
-            else:
-                final_ans = getattr(question, "final_answer", None) or getattr(question, "final_answer_latex", None)
-                if final_ans and str(final_ans).strip():
-                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
-                    story.append(Paragraph(_pdf_safe_text(str(final_ans).strip()), normal_style))
-                    story.append(Spacer(1, 0.4*inch))
-                else:
-                    story.append(Paragraph("<b>Solution (reference):</b>", heading_style))
-                    story.append(Paragraph("<i>No reference solution stored for this question.</i>", normal_style))
-                    story.append(Spacer(1, 0.4*inch))
-    
+        alphabet = 'abcdefghijklmnopqrstuvwxyz'
+        tree = _build_question_tree(exam.questions)
+        for q_num, (top_q, subs) in enumerate(tree, 1):
+            _render_question_block(
+                top_q, story,
+                q_label=f"Question {q_num}",
+                normal_style=normal_style, heading_style=heading_style, sub_style=normal_style,
+                include_solutions=include_solutions, inch=inch, UPLOAD_DIR=UPLOAD_DIR
+            )
+            for s_num, sub_q in enumerate(subs):
+                letter = alphabet[s_num] if s_num < len(alphabet) else str(s_num + 1)
+                _render_question_block(
+                    sub_q, story,
+                    q_label=f"({letter})",
+                    normal_style=sub_style_v, heading_style=sub_heading_v, sub_style=sub_style_v,
+                    include_solutions=include_solutions, inch=inch, UPLOAD_DIR=UPLOAD_DIR
+                )
+            story.append(Spacer(1, 0.3 * inch))
+
     try:
         doc.build(story)
         buffer.seek(0)
@@ -3556,10 +3941,15 @@ async def view_exam_pdf(
     safe_filename = _pdf_safe_text(exam.title).replace(" ", "_").replace("/", "_").replace("\\", "_")[:100]
     if not safe_filename:
         safe_filename = "exam"
+    suffix = "_with_solutions" if include_solutions else "_questions_only"
     return StreamingResponse(
         buffer,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"inline; filename={safe_filename}.pdf"}
+        headers={
+            "Content-Disposition": f"inline; filename={safe_filename}{suffix}.pdf",
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        }
     )
 
 

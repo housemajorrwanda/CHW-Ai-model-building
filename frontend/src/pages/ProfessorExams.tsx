@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { FileText, Eye, EyeOff, Users, CheckCircle, Clock, Plus, Loader2, Edit, Trash2 } from 'lucide-react';
+import { FileText, Eye, EyeOff, Users, Plus, Loader2, Edit, Trash2, Download, BookOpenCheck, ListChecks } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
@@ -18,6 +18,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 
 interface Exam {
   id: string;
@@ -53,6 +60,8 @@ export default function ProfessorExams() {
   });
   const [deleteDialog, setDeleteDialog] = useState<{ isOpen: boolean; exam: Exam | null }>({ isOpen: false, exam: null });
   const [deletingExamId, setDeletingExamId] = useState<string | null>(null);
+  const [downloadDialog, setDownloadDialog] = useState<{ isOpen: boolean; exam: Exam | null }>({ isOpen: false, exam: null });
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -109,6 +118,30 @@ export default function ProfessorExams() {
       toast.error((error as Error).message || 'Failed to delete exam');
     } finally {
       setDeletingExamId(null);
+    }
+  };
+
+  const handleDownloadPDF = async (includeSolutions: boolean) => {
+    if (!downloadDialog.exam) return;
+    const exam = downloadDialog.exam;
+    setIsDownloading(true);
+    setDownloadDialog({ isOpen: false, exam: null });
+    try {
+      const blob = await examsAPI.downloadPDF(exam.id, includeSolutions);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const suffix = includeSolutions ? '_with_solutions' : '_questions_only';
+      a.download = `${exam.title.replace(/\s+/g, '_')}${suffix}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('PDF downloaded!');
+    } catch (error: any) {
+      toast.error('Failed to download PDF');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -198,25 +231,11 @@ export default function ProfessorExams() {
           <Button
             variant="outline"
             size="sm"
-            onClick={async () => {
-              try {
-                const blob = await examsAPI.downloadPDF(exam.id);
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${exam.title.replace(/\s+/g, '_')}.pdf`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-                toast.success('PDF downloaded!');
-              } catch (error: any) {
-                toast.error('Failed to download PDF');
-              }
-            }}
+            disabled={isDownloading}
+            onClick={() => setDownloadDialog({ isOpen: true, exam })}
           >
-            <FileText className="h-4 w-4 mr-2" />
-            PDF
+            <Download className="h-4 w-4 mr-2" />
+            {isDownloading ? '…' : 'PDF'}
           </Button>
           <Button
             variant="outline"
@@ -454,6 +473,53 @@ export default function ProfessorExams() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Download PDF Dialog */}
+      <Dialog open={downloadDialog.isOpen} onOpenChange={(open) => setDownloadDialog({ isOpen: open, exam: open ? downloadDialog.exam : null })}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Download className="h-5 w-5" />
+              Download PDF — {downloadDialog.exam?.title}
+            </DialogTitle>
+            <DialogDescription>
+              Choose what to include in the downloaded PDF.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 gap-3 pt-2">
+            <button
+              onClick={() => handleDownloadPDF(false)}
+              className="flex items-start gap-4 rounded-lg border p-4 text-left hover:bg-muted/50 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <ListChecks className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Questions only</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Export the exam questions and answer spaces — suitable for printing and distributing to students.
+                </p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => handleDownloadPDF(true)}
+              className="flex items-start gap-4 rounded-lg border p-4 text-left hover:bg-muted/50 transition-colors focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700">
+                <BookOpenCheck className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Questions + Golden Answers</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Include the reference solution steps and final answers — suitable for your own records or marking guides.
+                </p>
+              </div>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
