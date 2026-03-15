@@ -18,10 +18,12 @@ import {
   Superscript as SuperscriptIcon, Subscript as SubscriptIcon,
   Undo, Redo, Calculator, Highlighter,
 } from 'lucide-react';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Placeholder from '@tiptap/extension-placeholder';
 import ScientificKeyboard from './ScientificKeyboard';
 import { FormulaInserter } from '../exam-builder/tools/FormulaInserter';
+import { useEditorLatexCompletion } from '@/hooks/useEditorLatexCompletion';
+import { EditorLatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { cn } from '@/lib/utils';
 
 interface AnswerEditorProps {
@@ -73,6 +75,13 @@ export function AnswerEditor({
   placeholder = 'Type your answer here…',
 }: AnswerEditorProps) {
   const [showKeyboard, setShowKeyboard] = useState(false);
+  type EditingMath = { pos: number; latex: string; block: boolean };
+  const [editingMath, setEditingMath] = useState<EditingMath | null>(null);
+  const onMathClickRef = useRef<(pos: number, latex: string, block: boolean) => void>(() => {});
+
+  useEffect(() => {
+    onMathClickRef.current = (pos, latex, block) => setEditingMath({ pos, latex, block });
+  }, []);
 
   const editor = useEditor({
     extensions: [
@@ -83,7 +92,14 @@ export function AnswerEditor({
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Highlight.configure({ multicolor: false }),
       CharacterCount,
-      Mathematics,
+      Mathematics.configure({
+        inlineOptions: {
+          onClick: (node, pos) => onMathClickRef.current?.(pos, node.attrs.latex ?? '', false),
+        },
+        blockOptions: {
+          onClick: (node, pos) => onMathClickRef.current?.(pos, node.attrs.latex ?? '', true),
+        },
+      }),
       Placeholder.configure({ placeholder }),
     ],
     content: answer || '',
@@ -101,6 +117,18 @@ export function AnswerEditor({
     },
     immediatelyRender: false,
   });
+
+  const latexCompletion = useEditorLatexCompletion(editor);
+
+  useEffect(() => {
+    if (!editor?.view) return;
+    const dom = editor.view.dom;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (latexCompletion.handleKeyDown(editor.view as any, e)) e.preventDefault();
+    };
+    dom.addEventListener('keydown', onKeyDown, true);
+    return () => dom.removeEventListener('keydown', onKeyDown, true);
+  }, [editor, latexCompletion.handleKeyDown]);
 
   // After any paste, convert $...$ to proper math nodes
   useEffect(() => {
@@ -203,7 +231,29 @@ export function AnswerEditor({
         <TSep />
 
         {/* Formula */}
-        <FormulaInserter onInsert={insertFormula} compact />
+        <div className="inline-flex items-center gap-1.5">
+          <FormulaInserter onInsert={insertFormula} compact />
+          <span className="text-[10px] text-muted-foreground hidden sm:inline" title="Equations are clickable to edit">
+            Click to edit
+          </span>
+        </div>
+        {/* Edit equation dialog (opened when clicking an existing math node) */}
+        <FormulaInserter
+          onInsert={() => {}}
+          open={editingMath !== null}
+          onOpenChange={(open) => !open && setEditingMath(null)}
+          initialLatex={editingMath?.latex}
+          initialDisplayMode={editingMath?.block}
+          onUpdate={(latex) => {
+            if (!editingMath || !editor) return;
+            if (editingMath.block) {
+              editor.chain().setNodeSelection(editingMath.pos).updateBlockMath({ latex }).focus().run();
+            } else {
+              editor.chain().setNodeSelection(editingMath.pos).updateInlineMath({ latex }).focus().run();
+            }
+            setEditingMath(null);
+          }}
+        />
 
         {/* Scientific Keyboard toggle */}
         <TB onClick={() => setShowKeyboard((v) => !v)} active={showKeyboard} title="Scientific Keyboard">
@@ -219,7 +269,16 @@ export function AnswerEditor({
       )}
 
       {/* ── Editor Area ── */}
-      <EditorContent editor={editor} className="prose-editor-expand" />
+      <div className="relative">
+        <EditorContent editor={editor} className="prose-editor-expand" />
+        {latexCompletion.completionState && (
+          <EditorLatexCompletionsList
+            editor={editor}
+            state={latexCompletion.completionState}
+            onSelect={latexCompletion.applySnippet}
+          />
+        )}
+      </div>
 
       {/* ── Footer: word / char count ── */}
       <div className="px-4 py-1.5 border-t bg-muted/20 flex items-center justify-end gap-3 text-xs text-muted-foreground">

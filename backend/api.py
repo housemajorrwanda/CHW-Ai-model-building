@@ -1805,21 +1805,27 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
         return '', None
     
     # Extract LaTeX from math nodes (if present)
+    # TipTap Mathematics: data-type="inline-math" or "block-math", LaTeX in data-latex attribute
     latex_content = None
+    all_latex = []
+    # data-latex="..." (TipTap and similar)
+    for attr_match in re.finditer(r'data-latex="([^"]*)"', html_content):
+        if attr_match.group(1).strip():
+            all_latex.append(attr_match.group(1).strip())
+    # Legacy / markdown-style patterns
     latex_patterns = [
-        r'<span[^>]*data-type="math"[^>]*>(.*?)</span>',
+        r'<span[^>]*data-type="(?:inline-)?math"[^>]*>(.*?)</span>',
+        r'<div[^>]*data-type="block-math"[^>]*>(.*?)</div>',
         r'<span[^>]*class="[^"]*math[^"]*"[^>]*>(.*?)</span>',
         r'\$\$(.*?)\$\$',
         r'\$(.*?)\$',
         r'\\\[(.*?)\\\]',
         r'\\\((.*?)\\\)',
     ]
-    
-    all_latex = []
     for pattern in latex_patterns:
         matches = re.findall(pattern, html_content, re.DOTALL)
         if matches:
-            all_latex.extend(matches)
+            all_latex.extend([m.strip() for m in matches if m and m.strip()])
     
     if all_latex:
         # Join all LaTeX expressions, separated by spaces
@@ -1843,21 +1849,32 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
 def parse_answer_into_steps(answer_text: str) -> List[str]:
     """
     Parse a student's answer into individual steps.
-    Enhanced to detect steps from single-line typed answers.
+    Uses multiple strategies so step-by-step grading works even when the student
+    doesn't use explicit "Step 1" labels (e.g. numbered lines, newlines, = or ;).
     """
     if not answer_text or not answer_text.strip():
         return []
-    
+
     text = answer_text.strip()
-    
-    # Split by newlines first
     lines = [line.strip() for line in text.split('\n') if line.strip()]
-    
-    # Single line - try multiple strategies
+
+    # ---- 1) Single line: try to split into steps ----
     if len(lines) <= 1:
         single_line = text
-        
-        # Strategy 1: Split by = signs (math equations)
+
+        # 1a) Numbered steps in one line: "1. foo 2. bar" or "(1) foo (2) bar"
+        numbered_dot = re.split(r'\s+(?=\d+\.\s+)', single_line)
+        if len(numbered_dot) > 1:
+            out = [s.strip() for s in numbered_dot if s.strip()]
+            if out:
+                return out
+        numbered_paren = re.split(r'\s+(?=\(\d+\)\s+)', single_line)
+        if len(numbered_paren) > 1:
+            out = [s.strip() for s in numbered_paren if s.strip()]
+            if out:
+                return out
+
+        # 1b) Split by = (equation steps)
         if '=' in single_line:
             parts = re.split(r'(?<![<>=!])=(?!=)', single_line)
             if len(parts) > 1:
@@ -1870,71 +1887,68 @@ def parse_answer_into_steps(answer_text: str) -> List[str]:
                         steps.append(step)
                 if steps:
                     return steps
-        
-        # Strategy 2: Split by semicolons (common separator)
+
+        # 1c) Semicolons
         if ';' in single_line:
             parts = [p.strip() for p in single_line.split(';') if p.strip()]
             if len(parts) > 1:
                 return parts
-        
-        # Strategy 3: Split by "then" or "and" (natural language)
+
+        # 1d) "then" / "and" / "next"
         if re.search(r'\s+(then|and|next|after|followed by)\s+', single_line, re.IGNORECASE):
             parts = re.split(r'\s+(?:then|and|next|after|followed by)\s+', single_line, flags=re.IGNORECASE)
             if len(parts) > 1:
                 return [p.strip() for p in parts if p.strip()]
-        
-        # Strategy 4: Split by numbered patterns (1), 2), etc.
-        numbered = re.split(r'\s+\(?\d+\)\s+', single_line)
-        if len(numbered) > 1:
-            return [p.strip() for p in numbered if p.strip()]
-        
+
         return [single_line] if single_line else []
-    
-    # Multiple lines - enhanced detection
+
+    # ---- 2) Multiple lines: treat each line as a potential step, merge only when needed ----
     steps = []
     current_step = []
-    
+
     for line in lines:
-        # Check if line starts a new step
         is_new_step = False
-        
-        # Pattern 1: Step markers
-        if re.match(r'^(step\s*\d+|step|solution|answer|\(?\d+[\.\)])\s*:?\s*', line, re.IGNORECASE):
+        # Explicit step markers
+        if re.match(r'^(step\s*\d+|step|solution|answer)\s*:?\s*', line, re.IGNORECASE):
             is_new_step = True
-        # Pattern 2: Starts with =
+        elif re.match(r'^\(?\d+[\.\)]\s+', line):
+            is_new_step = True
         elif line.startswith('='):
             is_new_step = True
-        # Pattern 3: Starts with number followed by punctuation
         elif re.match(r'^\d+[\.\)]\s+', line):
             is_new_step = True
-        # Pattern 4: Empty line (double newline)
-        elif not line.strip() and current_step:
-            is_new_step = True
-        
+
         if is_new_step and current_step:
             step_text = ' '.join(current_step).strip()
             if step_text:
                 steps.append(step_text)
-            current_step = [line] if line.strip() else []
+            current_step = [line]
         else:
-            if line.strip():
+            # If this line looks like a new equation/step on its own (e.g. LaTeX block or short line after blank), treat as new step
+            if current_step and line and re.match(r'^(\$\$|\\\[|\\\(|\d+[\.\)]\s+)', line):
+                step_text = ' '.join(current_step).strip()
+                if step_text:
+                    steps.append(step_text)
+                current_step = [line]
+            else:
                 current_step.append(line)
-    
-    # Add last step
+
     if current_step:
         step_text = ' '.join(current_step).strip()
         if step_text:
             steps.append(step_text)
-    
-    # Fallback: split by double newlines
+
+    # ---- 3) If we still have only one step, try double-newline and "one step per line" ----
     if len(steps) <= 1:
-        double_newline_split = [s.strip() for s in text.split('\n\n') if s.strip()]
-        if len(double_newline_split) > 1:
-            steps = double_newline_split
-        else:
-            steps = [text.strip()]
-    
-    return steps if steps else [text.strip()]
+        double_newline = [s.strip() for s in text.split('\n\n') if s.strip()]
+        if len(double_newline) > 1:
+            return double_newline
+        # One step per non-empty line (good when student writes one equation per line)
+        if len(lines) > 1:
+            return lines
+        return [text.strip()] if text else []
+
+    return steps
 
 
 async def grade_submission_automatically(submission_id: str, db: Session):
@@ -2658,6 +2672,9 @@ async def grade_submission(
     if not has_typed_answers and not has_images:
         raise HTTPException(status_code=400, detail="No answers found for submission (neither typed nor images)")
     
+    # Track questions already graded (e.g. from typed answers) to avoid double-counting when we also have images
+    graded_question_ids: set = set()
+    
     # Process typed answers if available
     if has_typed_answers:
         try:
@@ -2745,6 +2762,7 @@ async def grade_submission(
                     db.add(step_result)
                 
                 total_score += grading_result['total_score']
+                graded_question_ids.add(question.id)
                 
         except Exception as e:
             print(f"Error grading typed answers: {e}")
@@ -2769,14 +2787,16 @@ async def grade_submission(
             
             student_steps = ocr_result.steps
             
-            # Grade each question (assuming one question per image for now)
+            # Grade each question (assuming one question per image for now); skip if already graded from typed answers
             if image.page_number <= len(questions):
                 question = questions[image.page_number - 1]
+                if question.id in graded_question_ids:
+                    continue
                 
                 # Get gold solution steps
                 gold_steps = [
                     GraderStep(
-                        content=step.expression,
+                        content=(step.expression or step.latex or '').strip(),
                         points=float(step.points),
                         required=step.required
                     )
@@ -2791,6 +2811,7 @@ async def grade_submission(
                     submission_id=submission.id,
                     question_id=question.id,
                     extracted_text="\n".join(student_steps),
+                    extracted_latex=None,
                     score=grading_result['total_score'],
                     max_score=grading_result['max_score'],
                     feedback=f"Scored {grading_result['percentage']:.1f}%",
@@ -3190,6 +3211,47 @@ def _pdf_safe_text(s) -> str:
     return result
 
 
+def _render_latex_to_flowable(latex_str, inch, max_width_inch=5.2, fontsize=12):
+    """
+    Render a LaTeX math string to a ReportLab Image flowable using matplotlib mathtext.
+    Returns the flowable, or None on failure (caller can fall back to plain text).
+    """
+    import io as _io
+    import re as _re
+    if not latex_str or not str(latex_str).strip():
+        return None
+    latex_str = str(latex_str).strip()
+    # Normalize for mathtext: wrap in $ $ and replace common unicode
+    s = latex_str
+    s = s.replace("\u221e", "\\infty").replace("\u00b1", "\\pm")
+    s = s.replace("\u00d7", "\\times").replace("\u00f7", "\\div")
+    if not s.startswith("$"):
+        s = "$" + s + "$"
+    try:
+        from matplotlib.mathtext import math_to_image
+        from reportlab.platypus import Image as RLImage
+        from reportlab.lib.utils import ImageReader
+        buf = _io.BytesIO()
+        math_to_image(s, buf, dpi=150, format="png")
+        buf.seek(0)
+        reader = ImageReader(buf)
+        iw, ih = reader.getSize()
+        if iw <= 0 or ih <= 0:
+            return None
+        dpi = 150
+        w_pt = iw * 72 / dpi
+        h_pt = ih * 72 / dpi
+        max_pt = max_width_inch * 72
+        scale = min(1.0, max_pt / w_pt)
+        w_pt *= scale
+        h_pt *= scale
+        buf.seek(0)
+        return RLImage(buf, width=w_pt, height=h_pt)
+    except Exception as e:
+        logger.warning(f"PDF LaTeX render failed ({latex_str[:50]}...): {e}")
+        return None
+
+
 def _build_question_tree(questions):
     """
     Given a flat list of Question ORM objects, return a list of
@@ -3264,6 +3326,92 @@ def _rich_content_to_story_elements(rich_content, normal_style, sub_style, inch,
             return f"<i>[{_xs(latex)}]</i>" if latex else ""
         # Fallback: recurse children as inline
         return "".join(_inline(c) for c in node.get("content") or [])
+
+    def _paragraph_segments(children):
+        """Return list of ('text', markup_str) and ('math', latex_str) for inline math rendering."""
+        segs = []
+        for c in children or []:
+            if not isinstance(c, dict):
+                continue
+            ntype = c.get("type", "")
+            if ntype == "text":
+                raw = c.get("text", "")
+                if raw.startswith(_PLACEHOLDER_PREFIX):
+                    continue
+                safe = _xs(raw)
+                for mark in c.get("marks") or []:
+                    mt = mark.get("type", "")
+                    if mt == "bold":
+                        safe = f"<b>{safe}</b>"
+                    elif mt == "italic":
+                        safe = f"<i>{safe}</i>"
+                    elif mt == "underline":
+                        safe = f"<u>{safe}</u>"
+                    elif mt == "strike":
+                        safe = f"<strike>{safe}</strike>"
+                    elif mt == "code":
+                        safe = f"<font face='Courier'>{safe}</font>"
+                if segs and segs[-1][0] == "text":
+                    segs[-1] = ("text", segs[-1][1] + safe)
+                else:
+                    segs.append(("text", safe))
+            elif ntype in ("inlineMath", "mathInline"):
+                latex = c.get("attrs", {}).get("latex", "")
+                if latex:
+                    segs.append(("math", latex))
+            else:
+                # Recurse (e.g. nested content)
+                sub = _paragraph_segments(c.get("content") or [])
+                for kind, val in sub:
+                    if kind == "text" and segs and segs[-1][0] == "text":
+                        segs[-1] = ("text", segs[-1][1] + val)
+                    else:
+                        segs.append((kind, val))
+        return segs
+
+    def _paragraph_flowables(children, style, wrap_bold=False, prefix=""):
+        """Build one or more flowables for a paragraph, rendering inline math as images."""
+        segs = _paragraph_segments(children)
+        if not segs:
+            return []
+        if prefix and segs and segs[0][0] == "text":
+            segs = [("text", prefix + segs[0][1])] + segs[1:]
+        math_flowables = []
+        for kind, val in segs:
+            if kind == "math":
+                fl = _render_latex_to_flowable(val, inch, max_width_inch=1.8)
+                math_flowables.append(fl if fl else Paragraph(f"<i>[{_xs(val)}]</i>", style))
+            else:
+                math_flowables.append(None)  # text handled below
+        # Build list of flowables: Paragraph for text runs, Image/Paragraph for math
+        flowables = []
+        text_run = []
+        for i, (kind, val) in enumerate(segs):
+            if kind == "text":
+                text_run.append(val)
+            else:
+                if text_run:
+                    markup = ("<b>" if wrap_bold else "") + "".join(text_run) + ("</b>" if wrap_bold else "")
+                    flowables.append(Paragraph(markup, style))
+                    text_run = []
+                flowables.append(math_flowables[i])
+        if text_run:
+            markup = ("<b>" if wrap_bold else "") + "".join(text_run) + ("</b>" if wrap_bold else "")
+            flowables.append(Paragraph(markup, style))
+        if not flowables:
+            return []
+        if len(flowables) == 1:
+            return [flowables[0]]
+        # One row table so text and math sit on same line
+        from reportlab.platypus import Table as RLTable, TableStyle
+        col_w = (5.2 * 72) / len(flowables)  # points
+        t = RLTable([flowables], colWidths=[col_w] * len(flowables))
+        t.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        return [t]
 
     def _image_flowable(src: str):
         """Turn an image src (base64 data URL or server URL) into an RLImage, or None."""
@@ -3348,33 +3496,33 @@ def _rich_content_to_story_elements(rich_content, normal_style, sub_style, inch,
                 process(c)
 
         elif ntype == "paragraph":
-            markup = "".join(_inline(c) for c in children).strip()
-            if markup and not markup.startswith(_PLACEHOLDER_PREFIX):
-                elements.append(Paragraph(markup, normal_style))
+            flowables = _paragraph_flowables(children, normal_style)
+            for fl in flowables:
+                elements.append(fl)
 
         elif ntype == "heading":
-            markup = "".join(_inline(c) for c in children).strip()
-            if markup:
-                elements.append(Paragraph(f"<b>{markup}</b>", normal_style))
+            flowables = _paragraph_flowables(children, normal_style, wrap_bold=True)
+            for fl in flowables:
+                elements.append(fl)
 
         elif ntype == "bulletList":
             for item in children:
-                item_markup = "".join(_inline(c) for c in (item.get("content") or [])).strip()
-                if item_markup:
-                    elements.append(Paragraph(f"• {item_markup}", normal_style))
+                flowables = _paragraph_flowables(item.get("content") or [], normal_style, prefix="• ")
+                for fl in flowables:
+                    elements.append(fl)
 
         elif ntype == "orderedList":
             for idx, item in enumerate(children, 1):
-                item_markup = "".join(_inline(c) for c in (item.get("content") or [])).strip()
-                if item_markup:
-                    elements.append(Paragraph(f"{idx}. {item_markup}", normal_style))
+                flowables = _paragraph_flowables(item.get("content") or [], normal_style, prefix=f"{idx}. ")
+                for fl in flowables:
+                    elements.append(fl)
 
         elif ntype == "blockquote":
             from reportlab.lib.styles import ParagraphStyle
             qs = ParagraphStyle('quote', parent=normal_style, leftIndent=18, textColor=_colors.grey)
-            markup = "".join(_inline(c) for c in children).strip()
-            if markup:
-                elements.append(Paragraph(f"<i>{markup}</i>", qs))
+            flowables = _paragraph_flowables(children, qs)
+            for fl in flowables:
+                elements.append(fl)
 
         elif ntype == "codeBlock":
             from reportlab.lib.styles import ParagraphStyle
@@ -3390,7 +3538,11 @@ def _rich_content_to_story_elements(rich_content, normal_style, sub_style, inch,
             latex = node.get("attrs", {}).get("latex", "")
             if latex:
                 elements.append(Spacer(1, 0.08 * inch))
-                elements.append(Paragraph(f"<i>[ {_xs(latex)} ]</i>", sub_style))
+                img = _render_latex_to_flowable(latex, inch, max_width_inch=5.2)
+                if img:
+                    elements.append(img)
+                else:
+                    elements.append(Paragraph(f"<i>[ {_xs(latex)} ]</i>", sub_style))
                 elements.append(Spacer(1, 0.08 * inch))
 
         elif ntype == "image":
@@ -3516,12 +3668,22 @@ def _render_question_block(q, story, q_label, normal_style, heading_style, sub_s
             if final_lat and str(final_lat).strip():
                 fa = _re_q.sub(r'\$\$?(.*?)\$\$?', r'\1', str(final_lat), flags=_re_q.DOTALL).strip()
                 if fa:
-                    story.append(Paragraph(f'<b>Final Answer:</b> {_pdf_safe_text(fa)}', sub_style))
+                    fa_img = _render_latex_to_flowable(fa, inch, max_width_inch=3.0)
+                    if fa_img:
+                        story.append(Paragraph('<b>Final Answer:</b>', sub_style))
+                        story.append(fa_img)
+                    else:
+                        story.append(Paragraph(f'<b>Final Answer:</b> {_pdf_safe_text(fa)}', sub_style))
         else:
             final_ans = getattr(q, 'final_answer_latex', None) or getattr(q, 'final_answer', None)
             if final_ans and str(final_ans).strip():
                 fa = _re_q.sub(r'\$\$?(.*?)\$\$?', r'\1', str(final_ans), flags=_re_q.DOTALL).strip()
-                story.append(Paragraph(f'<b>Final Answer:</b> {_pdf_safe_text(fa)}', sub_style))
+                fa_img = _render_latex_to_flowable(fa, inch, max_width_inch=3.0)
+                if fa_img:
+                    story.append(Paragraph('<b>Final Answer:</b>', sub_style))
+                    story.append(fa_img)
+                else:
+                    story.append(Paragraph(f'<b>Final Answer:</b> {_pdf_safe_text(fa)}', sub_style))
             else:
                 story.append(Paragraph('<i>No reference solution stored.</i>', sub_style))
         story.append(Spacer(1, 0.3 * inch))

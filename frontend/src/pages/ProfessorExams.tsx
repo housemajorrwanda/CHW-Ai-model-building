@@ -227,10 +227,11 @@ export default function ProfessorExams() {
             )}
           </div>
         </CardContent>
-        <CardFooter className="flex gap-2">
+        <CardFooter className="flex flex-wrap gap-2 min-w-0">
           <Button
             variant="outline"
             size="sm"
+            className="shrink-0"
             disabled={isDownloading}
             onClick={() => setDownloadDialog({ isOpen: true, exam })}
           >
@@ -240,16 +241,16 @@ export default function ProfessorExams() {
           <Button
             variant="outline"
             size="sm"
-            className="flex-1"
+            className="flex-1 min-w-0 shrink"
             onClick={() => navigate(`/exams/${exam.id}/edit`)}
           >
-            <Edit className="h-4 w-4 mr-2" />
-            Edit
+            <Edit className="h-4 w-4 mr-2 shrink-0" />
+            <span className="truncate">Edit</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
-            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+            className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
             onClick={() => setDeleteDialog({ isOpen: true, exam })}
             title="Delete exam"
           >
@@ -260,15 +261,17 @@ export default function ProfessorExams() {
               <Button
                 variant="outline"
                 size="sm"
-                className="flex-1"
+                className="flex-1 min-w-0 shrink"
                 onClick={() => navigate(`/submissions?exam=${exam.id}`)}
               >
-                <Users className="h-4 w-4 mr-2" />
-                Submissions ({stats.total})
+                <Users className="h-4 w-4 mr-2 shrink-0" />
+                <span className="truncate">Submissions ({stats.total})</span>
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
+                className="shrink-0"
+                title="Unpublish exam"
                 onClick={() => setConfirmDialog({ isOpen: true, exam, action: 'unpublish' })}
                 disabled={isPublishing}
               >
@@ -282,19 +285,19 @@ export default function ProfessorExams() {
           ) : (
             <Button
               size="sm"
-              className="flex-1"
+              className="flex-1 min-w-0 shrink"
               onClick={() => setConfirmDialog({ isOpen: true, exam, action: 'publish' })}
               disabled={isPublishing}
             >
               {isPublishing ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Publishing...
+                  <Loader2 className="mr-2 h-4 w-4 shrink-0 animate-spin" />
+                  <span className="truncate">Publishing...</span>
                 </>
               ) : (
                 <>
-                  <Eye className="h-4 w-4 mr-2" />
-                  Publish
+                  <Eye className="h-4 w-4 mr-2 shrink-0" />
+                  <span className="truncate">Publish</span>
                 </>
               )}
             </Button>

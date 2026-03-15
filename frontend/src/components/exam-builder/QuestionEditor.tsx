@@ -32,7 +32,10 @@ import { TheoryManager } from './TheoryManager';
 import type { Question } from './QuestionBuilder';
 import { Badge } from '@/components/ui/badge';
 import { Plus } from 'lucide-react';
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
+import { useEditorLatexCompletion } from '@/hooks/useEditorLatexCompletion';
+import { EditorLatexCompletionsList } from '@/components/ui/latex-autocomplete';
+import { FormulaInserter } from './tools/FormulaInserter';
 
 interface QuestionEditorProps {
   question: Question;
@@ -40,8 +43,16 @@ interface QuestionEditorProps {
   onAddSubQuestion: () => void;
 }
 
+type EditingMath = { pos: number; latex: string; block: boolean };
+
 export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: QuestionEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const [editingMath, setEditingMath] = useState<EditingMath | null>(null);
+  const onMathClickRef = useRef<(pos: number, latex: string, block: boolean) => void>(() => {});
+
+  useEffect(() => {
+    onMathClickRef.current = (pos, latex, block) => setEditingMath({ pos, latex, block });
+  }, []);
 
   const editor = useEditor({
     extensions: [
@@ -73,7 +84,14 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       }),
       ShapeExtension,
       GraphExtension,
-      Mathematics,
+      Mathematics.configure({
+        inlineOptions: {
+          onClick: (node, pos) => onMathClickRef.current?.(pos, node.attrs.latex ?? '', false),
+        },
+        blockOptions: {
+          onClick: (node, pos) => onMathClickRef.current?.(pos, node.attrs.latex ?? '', true),
+        },
+      }),
       Placeholder.configure({ placeholder: 'Write your question here…' }),
     ],
     content: question.richContent || question.text || '',
@@ -99,6 +117,18 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       migrateMathStrings(editor);
     },
   });
+
+  const latexCompletion = useEditorLatexCompletion(editor);
+
+  useEffect(() => {
+    if (!editor?.view) return;
+    const dom = editor.view.dom;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (latexCompletion.handleKeyDown(editor.view as any, e)) e.preventDefault();
+    };
+    dom.addEventListener('keydown', onKeyDown, true);
+    return () => dom.removeEventListener('keydown', onKeyDown, true);
+  }, [editor, latexCompletion.handleKeyDown]);
 
   // After any paste event, convert $...$ text to proper math nodes
   useEffect(() => {
@@ -185,10 +215,36 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
         <CardContent className="space-y-4">
           {/* Toolbar */}
           <ToolbarPanel editor={editor} question={question} onUpdate={onUpdate} />
+          {/* Edit equation dialog (opened when clicking an existing math node) */}
+          {editor && (
+            <FormulaInserter
+              onInsert={() => {}}
+              open={editingMath !== null}
+              onOpenChange={(open) => !open && setEditingMath(null)}
+              initialLatex={editingMath?.latex}
+              initialDisplayMode={editingMath?.block}
+              onUpdate={(latex) => {
+                if (!editingMath || !editor) return;
+                if (editingMath.block) {
+                  editor.chain().setNodeSelection(editingMath.pos).updateBlockMath({ latex }).focus().run();
+                } else {
+                  editor.chain().setNodeSelection(editingMath.pos).updateInlineMath({ latex }).focus().run();
+                }
+                setEditingMath(null);
+              }}
+            />
+          )}
 
           {/* Editor Area */}
-          <div ref={editorRef} className="border rounded-lg min-h-[200px] focus-within:ring-2 focus-within:ring-primary/20 overflow-hidden">
+          <div ref={editorRef} className="border rounded-lg min-h-[200px] focus-within:ring-2 focus-within:ring-primary/20 overflow-hidden relative">
             <EditorContent editor={editor} className="p-4 prose prose-sm max-w-none" />
+            {editor && latexCompletion.completionState && (
+              <EditorLatexCompletionsList
+                editor={editor}
+                state={latexCompletion.completionState}
+                onSelect={latexCompletion.applySnippet}
+              />
+            )}
             {editor && (
               <div className="px-3 py-1.5 border-t bg-muted/30 flex items-center justify-end gap-3 text-xs text-muted-foreground">
                 <span>{editor.storage.characterCount?.words?.() ?? 0} words</span>

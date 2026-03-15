@@ -303,7 +303,12 @@ export function ToolbarPanel({ editor, question, onUpdate }: ToolbarPanelProps) 
         <ToolSep />
 
         {/* ── Formula ── */}
-        <FormulaInserter onInsert={insertFormula} />
+        <div className="inline-flex items-center gap-1.5">
+          <FormulaInserter onInsert={insertFormula} />
+          <span className="text-[10px] text-muted-foreground hidden sm:inline" title="Equations in the text are clickable">
+            Click equation to edit
+          </span>
+        </div>
 
         {/* ── Media ── */}
         <Popover>

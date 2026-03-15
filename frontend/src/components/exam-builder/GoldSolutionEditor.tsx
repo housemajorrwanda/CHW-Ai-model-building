@@ -13,6 +13,7 @@ import { UnitConverter } from './tools/UnitConverter';
 import { ConstantsLibrary } from './tools/ConstantsLibrary';
 import { FormulaInserter } from './tools/FormulaInserter';
 import { MathText } from '@/components/ui/MathText';
+import { useLatexAutocomplete, LatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import type { GoldStep } from './QuestionBuilder';
 import { toast } from 'sonner';
 
@@ -45,6 +46,8 @@ export function GoldSolutionEditor({ steps, finalAnswer, finalAnswerLatex, onUpd
 
   // Refs for each input so we can insert at cursor
   const inputRefs = useRef<Partial<Record<FieldKey, HTMLInputElement | null>>>({});
+  const latexAcNewStep = useLatexAutocomplete(newStep.latex ?? '', (v) => setNewStep((s) => ({ ...s, latex: v })));
+  const latexAcFinal = useLatexAutocomplete(finalAnswerLatex, (v) => onUpdate({ finalAnswerLatex: v }));
 
   /** Insert text at cursor position of the active field */
   const insertAtCursor = (symbol: string) => {
@@ -180,14 +183,27 @@ export function GoldSolutionEditor({ steps, finalAnswer, finalAnswerLatex, onUpd
                   <Label className="text-xs">LaTeX (optional)</Label>
                   <FormulaInserter onInsert={handleFormulaInsert} />
                 </div>
-                <Input
-                  ref={setRef('latex')}
-                  value={newStep.latex}
-                  onChange={(e) => setNewStep({ ...newStep, latex: e.target.value })}
-                  onFocus={() => setActiveField('latex')}
-                  placeholder="e.g., \phi = 4.8 \times 1.6 \times 10^{-19}"
-                  className={`font-mono text-sm ${activeField === 'latex' ? 'ring-2 ring-primary/40' : ''}`}
-                />
+                <div className="relative">
+                  <Input
+                    ref={(el) => {
+                      setRef('latex')(el);
+                      (latexAcNewStep.ref as React.MutableRefObject<HTMLInputElement | null>).current = el;
+                    }}
+                    value={latexAcNewStep.value}
+                    onChange={(e) => { latexAcNewStep.onChange(e); }}
+                    onKeyDown={latexAcNewStep.onKeyDown}
+                    onFocus={() => setActiveField('latex')}
+                    placeholder="e.g., \phi = 4.8 \times 1.6 \times 10^{-19}"
+                    className={`font-mono text-sm ${activeField === 'latex' ? 'ring-2 ring-primary/40' : ''}`}
+                  />
+                  {latexAcNewStep.showList && (
+                    <LatexCompletionsList
+                      completions={latexAcNewStep.completions}
+                      selectedIndex={latexAcNewStep.selectedIndex}
+                      onSelect={(s) => latexAcNewStep.apply(s)}
+                    />
+                  )}
+                </div>
                 {newStep.latex && (
                   <div className="mt-1 p-2 bg-blue-50 border border-blue-200 rounded text-center">
                     <MathText
@@ -351,14 +367,27 @@ export function GoldSolutionEditor({ steps, finalAnswer, finalAnswerLatex, onUpd
             </div>
             <div>
               <Label className="text-xs">LaTeX (optional)</Label>
-              <Input
-                ref={setRef('finalAnswerLatex')}
-                value={finalAnswerLatex}
-                onChange={(e) => onUpdate({ finalAnswerLatex: e.target.value })}
-                onFocus={() => setActiveField('finalAnswerLatex')}
-                placeholder="LaTeX representation"
-                className="font-mono text-sm"
-              />
+              <div className="relative">
+                <Input
+                  ref={(el) => {
+                    setRef('finalAnswerLatex')(el);
+                    (latexAcFinal.ref as React.MutableRefObject<HTMLInputElement | null>).current = el;
+                  }}
+                  value={latexAcFinal.value}
+                  onChange={latexAcFinal.onChange}
+                  onKeyDown={latexAcFinal.onKeyDown}
+                  onFocus={() => setActiveField('finalAnswerLatex')}
+                  placeholder="LaTeX representation"
+                  className="font-mono text-sm"
+                />
+                {latexAcFinal.showList && (
+                  <LatexCompletionsList
+                    completions={latexAcFinal.completions}
+                    selectedIndex={latexAcFinal.selectedIndex}
+                    onSelect={(s) => latexAcFinal.apply(s)}
+                  />
+                )}
+              </div>
             </div>
           </div>
         </div>

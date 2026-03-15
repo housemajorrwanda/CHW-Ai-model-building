@@ -397,6 +397,9 @@ export default function TakeExam() {
 
                     {/* ── Typed answer tab ──────────────────────────── */}
                     <TabsContent value="typed" className="p-6 pt-4 space-y-6">
+                      <p className="text-xs text-muted-foreground bg-muted/50 border border-border/50 rounded-md px-3 py-2">
+                        <strong>Tip for grading:</strong> Put each step on a new line or number steps (1. …, 2. …) so the system can score them accurately.
+                      </p>
                       {hasSubQuestions ? (
                         /* Per-sub-question editors */
                         (currentQuestion.subQuestions as any[]).map((sub: any, idx: number) => {
