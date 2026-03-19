@@ -378,12 +378,15 @@
   margin: 1em 0;
 }
 
-/* Auto-expanding editor for exam taking */
+/* Auto-expanding editor – fill available space for question/answer editing */
 .prose-editor-expand .ProseMirror {
-  min-height: 300px;
+  min-height: min(50vh, 400px);
   max-height: none !important;
+  max-width: none !important;
+  width: 100% !important;
   height: auto !important;
   overflow-y: visible !important;
+  flex: 1 1 auto;
 }
 
 .prose-editor-expand .ProseMirror p {

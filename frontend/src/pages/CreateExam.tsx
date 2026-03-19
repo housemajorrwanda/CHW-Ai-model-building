@@ -34,6 +34,7 @@ export default function CreateExam() {
   const [description, setDescription] = useState('');
   const [courseId, setCourseId] = useState('');
   const [duration, setDuration] = useState(120);
+  const [durationInput, setDurationInput] = useState('120');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -113,7 +114,8 @@ export default function CreateExam() {
       setTitle(examData.title || '');
       setDescription(examData.description || '');
       setCourseId(examData.courseId || '');
-      setDuration(120); // Default duration since Exam model doesn't have duration field
+      setDuration(120);
+      setDurationInput(String(examData.duration ?? 120));
       
       // Transform questions
       const transformedQuestions = (examData.questions || []).map((q: any, idx: number) =>
@@ -166,7 +168,7 @@ export default function CreateExam() {
         title,
         description,
         courseId,
-        duration,
+        duration: parseInt(durationInput, 10) || duration,
         questions: questions.map((q, idx) => ({
           number: idx + 1,
           text: q.text,
@@ -242,7 +244,7 @@ export default function CreateExam() {
 
   return (
     <DashboardLayout>
-      <div className="flex flex-col h-[calc(100vh-120px)] relative">
+      <div className="flex flex-col min-h-[calc(100vh-5rem)] relative">
         {/* Collapse Toggle Button */}
         <Button
           variant="outline"
@@ -480,10 +482,20 @@ export default function CreateExam() {
                     <Label htmlFor="duration">Duration (minutes)</Label>
                     <Input
                       id="duration"
-                      type="number"
-                      value={duration}
-                      onChange={(e) => setDuration(parseInt(e.target.value) || 120)}
-                      min={1}
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="e.g. 120"
+                      value={durationInput}
+                      onChange={(e) => setDurationInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      onBlur={() => {
+                        const n = parseInt(durationInput, 10);
+                        if (!Number.isNaN(n) && n >= 1) {
+                          setDuration(n);
+                          setDurationInput(String(n));
+                        } else {
+                          setDurationInput(String(duration));
+                        }
+                      }}
                     />
                   </div>
                 </div>

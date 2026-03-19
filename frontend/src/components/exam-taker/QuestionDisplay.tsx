@@ -49,7 +49,7 @@ export function QuestionDisplay({
               Q{questionNumber}
             </Badge>
             <span className="text-base font-normal text-muted-foreground">
-              {questionPoints} {questionPoints === 1 ? 'mark' : 'marks'}
+              {questionPoints} {questionPoints === 1 ? 'point' : 'points'}
             </span>
           </CardTitle>
         </div>
@@ -92,7 +92,7 @@ export function QuestionDisplay({
                 <div className="flex-1 space-y-1">
                   <RichContentViewer content={sub.richContent || sub.text} />
                   <span className="text-xs text-muted-foreground">
-                    [{sub.points} {sub.points === 1 ? 'mark' : 'marks'}]
+                    [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
                   </span>
                 </div>
               </div>

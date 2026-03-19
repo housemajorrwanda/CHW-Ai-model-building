@@ -76,7 +76,7 @@ export default function ProfessorSubmissions() {
     try {
       setGradingSubmissionId(confirmDialog.submission.id);
       await submissionsAPI.grade(confirmDialog.submission.id);
-      toast.success('Submission graded successfully with AI!', {
+      toast.success('Submission graded successfully.', {
         description: 'The student will be notified of their results.'
       });
       await loadData();
@@ -124,7 +124,7 @@ export default function ProfessorSubmissions() {
 
   const STATUS_LABEL: Record<string, string> = {
     approved:          'Approved',
-    graded:            'AI Graded',
+    graded:            'Auto-graded',
     awaiting_approval: 'Awaiting Approval',
     grading:           'Grading…',
     pending:           'Pending',
@@ -168,7 +168,7 @@ export default function ProfessorSubmissions() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Student Submissions</h1>
           <p className="text-muted-foreground">
-            Review and grade student submissions with AI assistance
+            Review and grade student submissions
           </p>
         </div>
 
@@ -192,7 +192,7 @@ export default function ProfessorSubmissions() {
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">AI Graded</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Auto-graded</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-blue-600">{gradedCount}</div>
@@ -249,7 +249,7 @@ export default function ProfessorSubmissions() {
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="grading">Grading</SelectItem>
-                  <SelectItem value="graded">AI Graded</SelectItem>
+                  <SelectItem value="graded">Auto-graded</SelectItem>
                   <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
                   <SelectItem value="approved">Approved</SelectItem>
                 </SelectContent>
@@ -263,7 +263,7 @@ export default function ProfessorSubmissions() {
           <CardHeader>
             <CardTitle>Submissions</CardTitle>
             <CardDescription>
-              Click on a submission to view details or grade with AI
+              Click on a submission to view details or run automatic grading
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -341,7 +341,7 @@ export default function ProfessorSubmissions() {
                               View
                             </Button>
 
-                            {/* Grade with AI — pending only */}
+                            {/* Auto-grade — pending only */}
                             {submission.status === 'pending' && (
                               <Button
                                 size="sm"
@@ -353,7 +353,7 @@ export default function ProfessorSubmissions() {
                                 ) : (
                                   <Sparkles className="h-4 w-4 mr-1.5" />
                                 )}
-                                {isGrading ? 'Grading…' : 'Grade with AI'}
+                                {isGrading ? 'Grading…' : 'Grade automatically'}
                               </Button>
                             )}
 
@@ -410,10 +410,10 @@ export default function ProfessorSubmissions() {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />
-              Grade with AI
+              Automatic grading
             </AlertDialogTitle>
             <AlertDialogDescription>
-              The AI will automatically grade this submission using OCR to read the handwritten work
+              The system will grade this submission using OCR to read the handwritten work
               and compare it against the gold solution steps.
               <br /><br />
               <strong>Student:</strong> {confirmDialog.submission?.studentName}
@@ -427,7 +427,7 @@ export default function ProfessorSubmissions() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleGrade}>
               <Sparkles className="h-4 w-4 mr-2" />
-              Start AI Grading
+              Start grading
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

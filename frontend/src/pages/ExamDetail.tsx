@@ -227,7 +227,7 @@ export default function ExamDetail() {
                   <div className="flex-1">
                     <p className="text-sm">{sub.text || '(No text)'}</p>
                     <span className="text-xs text-muted-foreground">
-                      [{sub.points} {sub.points === 1 ? 'mark' : 'marks'}]
+                      [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
                     </span>
                   </div>
                 </div>

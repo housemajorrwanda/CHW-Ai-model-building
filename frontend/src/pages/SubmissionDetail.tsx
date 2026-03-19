@@ -29,7 +29,7 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const STATUS_LABELS: Record<string, string> = {
-  graded:            'AI Graded',
+  graded:            'Auto-graded',
   awaiting_approval: 'Awaiting Approval',
   approved:          'Approved',
   pending:           'Pending',

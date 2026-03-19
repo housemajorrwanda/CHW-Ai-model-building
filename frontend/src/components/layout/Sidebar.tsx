@@ -56,7 +56,7 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="text-base font-semibold text-sidebar-foreground">EasyGrade</h1>
-            <p className="text-xs text-sidebar-foreground/60">AI Exam Grading</p>
+            <p className="text-xs text-sidebar-foreground/60">Exam Grading</p>
           </div>
         </div>
 

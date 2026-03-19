@@ -126,7 +126,7 @@ export default function SubmitExam() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Submit Exam</h1>
           <p className="text-muted-foreground mt-1">
-            Upload images of your handwritten exam answers for AI grading
+            Upload images of your handwritten exam answers for grading
           </p>
         </div>
 

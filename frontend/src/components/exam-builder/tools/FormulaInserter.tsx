@@ -10,7 +10,8 @@ import {
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { FunctionSquare, AlignCenter, AlignLeft, Pencil, Info } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { FunctionSquare, AlignCenter, AlignLeft, Pencil, Info, ChevronDown, ChevronUp } from 'lucide-react';
 import { useLatexAutocomplete, LatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { cn } from '@/lib/utils';
 
@@ -26,22 +27,23 @@ interface FormulaInserterProps {
   onUpdate?: (latex: string, displayMode: boolean) => void;
 }
 
-const commonFormulas = [
-  { label: 'Quadratic Formula', latex: 'x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}' },
-  { label: 'Pythagorean Theorem', latex: 'a^2 + b^2 = c^2' },
-  { label: 'Area of Circle', latex: 'A = \\pi r^2' },
-  { label: 'Volume of Sphere', latex: 'V = \\frac{4}{3}\\pi r^3' },
+type TemplateVar = { key: string; label: string; placeholder?: string };
+const commonFormulas: { label: string; latex: string; variables?: TemplateVar[] }[] = [
+  { label: 'Quadratic Formula', latex: 'x = \\frac{-{{b}} \\pm \\sqrt{{{b}}^2 - 4{{a}}{{c}}}}{2{{a}}}', variables: [{ key: 'a', label: 'a', placeholder: '1' }, { key: 'b', label: 'b', placeholder: '-3' }, { key: 'c', label: 'c', placeholder: '2' }] },
+  { label: 'Pythagorean Theorem', latex: '{{a}}^2 + {{b}}^2 = {{c}}^2', variables: [{ key: 'a', label: 'a' }, { key: 'b', label: 'b' }, { key: 'c', label: 'c' }] },
+  { label: 'Area of Circle', latex: 'A = \\pi {{r}}^2', variables: [{ key: 'r', label: 'r' }] },
+  { label: 'Volume of Sphere', latex: 'V = \\frac{4}{3}\\pi {{r}}^3', variables: [{ key: 'r', label: 'r' }] },
   { label: 'Euler\'s Formula', latex: 'e^{i\\pi} + 1 = 0' },
   { label: 'Derivative', latex: '\\frac{d}{dx}f(x)' },
-  { label: 'Integral', latex: '\\int_{a}^{b} f(x)\\,dx' },
-  { label: 'Sum', latex: '\\sum_{i=1}^{n} x_i' },
+  { label: 'Integral', latex: '\\int_{{{a}}}^{{{b}}} f(x)\\,dx', variables: [{ key: 'a', label: 'a' }, { key: 'b', label: 'b' }] },
+  { label: 'Sum', latex: '\\sum_{i=1}^{{{n}}} x_i', variables: [{ key: 'n', label: 'n' }] },
   { label: 'Limit', latex: '\\lim_{x \\to \\infty} f(x)' },
-  { label: 'Binomial Coefficient', latex: '\\binom{n}{k} = \\frac{n!}{k!(n-k)!}' },
-  { label: 'Matrix (2×2)', latex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}' },
+  { label: 'Binomial Coefficient', latex: '\\binom{{{n}}}{{{k}}} = \\frac{{{n}}!}{{{k}}!({{n}}-{{k}})!}', variables: [{ key: 'n', label: 'n' }, { key: 'k', label: 'k' }] },
+  { label: 'Matrix (2×2)', latex: '\\begin{pmatrix} {{a}} & {{b}} \\\\ {{c}} & {{d}} \\end{pmatrix}', variables: [{ key: 'a', label: 'a' }, { key: 'b', label: 'b' }, { key: 'c', label: 'c' }, { key: 'd', label: 'd' }] },
+  { label: 'Newton\'s Second Law', latex: 'F = {{m}} \\cdot {{a}}', variables: [{ key: 'm', label: 'm' }, { key: 'a', label: 'a' }] },
+  { label: 'Einstein Mass-Energy', latex: 'E = {{m}}c^2', variables: [{ key: 'm', label: 'm' }] },
+  { label: 'Ohm\'s Law', latex: 'V = {{I}}{{R}}', variables: [{ key: 'I', label: 'I' }, { key: 'R', label: 'R' }] },
   { label: 'Determinant', latex: '\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}' },
-  { label: 'Newton\'s Second Law', latex: 'F = ma' },
-  { label: 'Einstein Mass-Energy', latex: 'E = mc^2' },
-  { label: 'Ohm\'s Law', latex: 'V = IR' },
 ];
 
 const STRUCTURES: { latex: string; cursorOffset: number; label: string }[] = [
@@ -54,9 +56,64 @@ const STRUCTURES: { latex: string; cursorOffset: number; label: string }[] = [
   { label: '( )', latex: '\\left( \\right)', cursorOffset: 7 },
   { label: '2×2', latex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', cursorOffset: 22 },
 ];
+const BASIC_STRUCTURES = STRUCTURES.slice(0, 4);
+const MORE_STRUCTURES = STRUCTURES.slice(4);
 
 const SYMBOLS_ROW1 = ['+', '−', '×', '÷', '=', '≠', '±', '≤', '≥', '∞', '°', '∠', '√', '∫', '∑', '∏', '∂', '∇'];
 const SYMBOLS_ROW2 = ['α', 'β', 'γ', 'δ', 'ε', 'θ', 'λ', 'μ', 'π', 'σ', 'φ', 'ω', 'Δ', 'Σ', 'Ω'];
+const SYMBOLS_RELATIONS = ['≡', '≈', '≅', '∝', '∈', '∉', '∪', '∩', '⊂', '⊃', '⊆', '⊇', '⊥', '∥'];
+const BASIC_SYMBOLS = ['+', '−', '×', '÷', '=', '≠', '±', '≤'];
+const MORE_SYMBOLS_ROW1 = SYMBOLS_ROW1.slice(BASIC_SYMBOLS.length);
+const MORE_SYMBOLS_ROW2 = SYMBOLS_ROW2;
+const MORE_SYMBOLS_ROW3 = SYMBOLS_RELATIONS;
+
+/** Brackets: basic pairs + more (with separators, floor/ceiling, absolute/norm) */
+const BRACKETS_BASIC: { label: string; latex: string; cursorOffset: number }[] = [
+  { label: '( )', latex: '\\left( \\right)', cursorOffset: 7 },
+  { label: '[ ]', latex: '\\left[ \\right]', cursorOffset: 7 },
+  { label: '{ }', latex: '\\left\\{ \\right\\}', cursorOffset: 8 },
+  { label: '⟨ ⟩', latex: '\\langle \\rangle', cursorOffset: 8 },
+];
+const BRACKETS_MORE: { label: string; latex: string; cursorOffset: number }[] = [
+  { label: '( | )', latex: '\\left( \\middle| \\right)', cursorOffset: 14 },
+  { label: '{ | }', latex: '\\left\\{ \\middle| \\right\\}', cursorOffset: 16 },
+  { label: '⟨ | ⟩', latex: '\\langle \\middle| \\rangle', cursorOffset: 16 },
+  { label: '⟨ | | ⟩', latex: '\\langle \\middle| \\middle| \\rangle', cursorOffset: 24 },
+  { label: '⌊ ⌋', latex: '\\lfloor \\rfloor', cursorOffset: 8 },
+  { label: '⌈ ⌉', latex: '\\lceil \\rceil', cursorOffset: 8 },
+  { label: '| |', latex: '\\left| \\right|', cursorOffset: 8 },
+  { label: '‖ ‖', latex: '\\left\\| \\right\\|', cursorOffset: 11 },
+];
+
+/** Functions: trig, inverse, hyperbolic */
+const FUNCTIONS_BASIC: { label: string; latex: string; cursorOffset: number }[] = [
+  { label: 'sin', latex: '\\sin{}', cursorOffset: 5 },
+  { label: 'cos', latex: '\\cos{}', cursorOffset: 5 },
+  { label: 'tan', latex: '\\tan{}', cursorOffset: 5 },
+];
+const FUNCTIONS_MORE: { label: string; latex: string; cursorOffset: number }[] = [
+  { label: 'csc', latex: '\\csc{}', cursorOffset: 5 },
+  { label: 'sec', latex: '\\sec{}', cursorOffset: 5 },
+  { label: 'cot', latex: '\\cot{}', cursorOffset: 5 },
+  { label: 'sin⁻¹', latex: '\\arcsin{}', cursorOffset: 8 },
+  { label: 'cos⁻¹', latex: '\\arccos{}', cursorOffset: 8 },
+  { label: 'tan⁻¹', latex: '\\arctan{}', cursorOffset: 8 },
+  { label: 'sinh', latex: '\\sinh{}', cursorOffset: 6 },
+  { label: 'cosh', latex: '\\cosh{}', cursorOffset: 6 },
+  { label: 'tanh', latex: '\\tanh{}', cursorOffset: 6 },
+];
+
+/** Large operators with limits */
+const LARGE_OPS_BASIC: { label: string; latex: string; cursorOffset: number }[] = [
+  { label: '∫', latex: '\\int_{}^{}', cursorOffset: 6 },
+  { label: 'Σ', latex: '\\sum_{}^{}', cursorOffset: 7 },
+  { label: 'Π', latex: '\\prod_{}^{}', cursorOffset: 8 },
+];
+const LARGE_OPS_MORE: { label: string; latex: string; cursorOffset: number }[] = [
+  { label: '∬', latex: '\\iint_{}^{}', cursorOffset: 9 },
+  { label: '∭', latex: '\\iiint_{}^{}', cursorOffset: 10 },
+  { label: '∮', latex: '\\oint_{}^{}', cursorOffset: 9 },
+];
 
 function FormulaRenderer({ latex, displayMode }: { latex: string; displayMode: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -99,7 +156,21 @@ export function FormulaInserter({
   const [error, setError] = useState('');
   const [cursorStart, setCursorStart] = useState(0);
   const [cursorEnd, setCursorEnd] = useState(0);
+  const [showMoreStructures, setShowMoreStructures] = useState(false);
+  const [showMoreSymbols, setShowMoreSymbols] = useState(false);
+  const [showMoreBrackets, setShowMoreBrackets] = useState(false);
+  const [showMoreFunctions, setShowMoreFunctions] = useState(false);
+  const [showMoreLargeOps, setShowMoreLargeOps] = useState(false);
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
   const latexAutocomplete = useLatexAutocomplete(latex, setLatex);
+
+  const buildLatexFromTemplate = (templateLatex: string, vars: Record<string, string>) => {
+    let out = templateLatex;
+    Object.entries(vars).forEach(([key, value]) => {
+      out = out.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value || key);
+    });
+    return out.replace(/\{\{[^}]+\}\}/g, ''); // remove any unfilled
+  };
 
   // When opening in edit mode, prefill from initialLatex / initialDisplayMode
   useEffect(() => {
@@ -223,6 +294,255 @@ export function FormulaInserter({
           </TabsList>
 
           <TabsContent value="write" className="mt-3 space-y-3">
+            {/* Structures first (basic + … more) */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Structures</span>
+              <div className="flex flex-wrap gap-1 items-center">
+                {BASIC_STRUCTURES.map((s) => (
+                  <Button
+                    key={s.label}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                    onClick={() => insertAtCursor(s.latex, s.cursorOffset)}
+                  >
+                    {s.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowMoreStructures((v) => !v)}
+                >
+                  {showMoreStructures ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {showMoreStructures ? 'Less' : 'More'}
+                </Button>
+              </div>
+              {showMoreStructures && (
+                <div className="flex flex-wrap gap-1">
+                  {MORE_STRUCTURES.map((s) => (
+                    <Button
+                      key={s.label}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                      onClick={() => insertAtCursor(s.latex, s.cursorOffset)}
+                    >
+                      {s.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Brackets (basic + … more) */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Brackets</span>
+              <div className="flex flex-wrap gap-1 items-center">
+                {BRACKETS_BASIC.map((b) => (
+                  <Button
+                    key={b.label}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                    onClick={() => insertAtCursor(b.latex, b.cursorOffset)}
+                  >
+                    {b.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowMoreBrackets((v) => !v)}
+                >
+                  {showMoreBrackets ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {showMoreBrackets ? 'Less' : 'More'}
+                </Button>
+              </div>
+              {showMoreBrackets && (
+                <div className="flex flex-wrap gap-1">
+                  {BRACKETS_MORE.map((b) => (
+                    <Button
+                      key={b.label}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                      onClick={() => insertAtCursor(b.latex, b.cursorOffset)}
+                    >
+                      {b.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Functions (basic + … more) */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Functions</span>
+              <div className="flex flex-wrap gap-1 items-center">
+                {FUNCTIONS_BASIC.map((f) => (
+                  <Button
+                    key={f.label}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                    onClick={() => insertAtCursor(f.latex, f.cursorOffset)}
+                  >
+                    {f.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowMoreFunctions((v) => !v)}
+                >
+                  {showMoreFunctions ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {showMoreFunctions ? 'Less' : 'More'}
+                </Button>
+              </div>
+              {showMoreFunctions && (
+                <div className="flex flex-wrap gap-1">
+                  {FUNCTIONS_MORE.map((f) => (
+                    <Button
+                      key={f.label}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                      onClick={() => insertAtCursor(f.latex, f.cursorOffset)}
+                    >
+                      {f.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Large operators (basic + … more) */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Large operators</span>
+              <div className="flex flex-wrap gap-1 items-center">
+                {LARGE_OPS_BASIC.map((op) => (
+                  <Button
+                    key={op.label}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                    onClick={() => insertAtCursor(op.latex, op.cursorOffset)}
+                  >
+                    {op.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowMoreLargeOps((v) => !v)}
+                >
+                  {showMoreLargeOps ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {showMoreLargeOps ? 'Less' : 'More'}
+                </Button>
+              </div>
+              {showMoreLargeOps && (
+                <div className="flex flex-wrap gap-1">
+                  {LARGE_OPS_MORE.map((op) => (
+                    <Button
+                      key={op.label}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
+                      onClick={() => insertAtCursor(op.latex, op.cursorOffset)}
+                    >
+                      {op.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Symbols (basic + … more) */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Symbols</span>
+              <div className="flex flex-wrap gap-1 items-center">
+                {BASIC_SYMBOLS.map((sym) => (
+                  <button
+                    key={sym}
+                    type="button"
+                    className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
+                    onClick={() => insertAtCursor(sym, sym.length)}
+                  >
+                    {sym}
+                  </button>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-xs text-muted-foreground"
+                  onClick={() => setShowMoreSymbols((v) => !v)}
+                >
+                  {showMoreSymbols ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  {showMoreSymbols ? 'Less' : 'More'}
+                </Button>
+              </div>
+              {showMoreSymbols && (
+                <div className="space-y-1">
+                  <div className="flex flex-wrap gap-1">
+                    {MORE_SYMBOLS_ROW1.map((sym) => (
+                      <button
+                        key={sym}
+                        type="button"
+                        className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
+                        onClick={() => insertAtCursor(sym, sym.length)}
+                      >
+                        {sym}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {MORE_SYMBOLS_ROW2.map((sym) => (
+                      <button
+                        key={sym}
+                        type="button"
+                        className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
+                        onClick={() => insertAtCursor(sym, sym.length)}
+                      >
+                        {sym}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="text-xs text-muted-foreground self-center mr-1">Relations:</span>
+                    {MORE_SYMBOLS_ROW3.map((sym) => (
+                      <button
+                        key={sym}
+                        type="button"
+                        className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
+                        onClick={() => insertAtCursor(sym, sym.length)}
+                      >
+                        {sym}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* LaTeX input */}
             <div className="relative space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">LaTeX</label>
               <Textarea
@@ -247,52 +567,7 @@ export function FormulaInserter({
               )}
             </div>
 
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Structures</span>
-              <div className="flex flex-wrap gap-1">
-              {STRUCTURES.map((s) => (
-                <Button
-                  key={s.label}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                  onClick={() => insertAtCursor(s.latex, s.cursorOffset)}
-                >
-                  {s.label}
-                </Button>
-              ))}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Symbols</span>
-              <div className="flex flex-wrap gap-1">
-                {SYMBOLS_ROW1.map((sym) => (
-                  <button
-                    key={sym}
-                    type="button"
-                    className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                    onClick={() => insertAtCursor(sym, sym.length)}
-                  >
-                    {sym}
-                  </button>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {SYMBOLS_ROW2.map((sym) => (
-                  <button
-                    key={sym}
-                    type="button"
-                    className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                    onClick={() => insertAtCursor(sym, sym.length)}
-                  >
-                    {sym}
-                  </button>
-                ))}
-              </div>
-            </div>
-
+            {/* Live preview */}
             <div className="space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Live preview</span>
               <div className="min-h-[56px] py-3 px-4 rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center">
@@ -314,26 +589,60 @@ export function FormulaInserter({
           <TabsContent value="common" className="mt-3">
             <div className="grid grid-cols-1 gap-1.5 max-h-[320px] overflow-y-auto pr-1">
               {commonFormulas.map((formula, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between gap-4 p-2.5 rounded-md border border-muted-foreground/15 hover:bg-muted/40 cursor-pointer transition-colors"
-                  onClick={() => setLatex(formula.latex)}
-                >
-                  <span className="text-sm font-medium shrink-0">{formula.label}</span>
-                  <div className="flex-1 overflow-hidden text-right min-h-[28px] flex items-center justify-end">
-                    {open && <FormulaRenderer latex={formula.latex} displayMode={false} />}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    className="h-7 px-2.5 text-xs shrink-0"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleInsert(formula.latex);
-                    }}
-                  >
-                    Insert
-                  </Button>
+                <div key={idx} className="space-y-1.5">
+                  {formula.variables ? (
+                    <div className="p-2.5 rounded-md border border-muted-foreground/15 bg-muted/20 space-y-2">
+                      <span className="text-sm font-medium">{formula.label}</span>
+                      <div className="flex flex-wrap gap-2 items-center">
+                        {formula.variables.map((v) => (
+                          <div key={v.key} className="flex items-center gap-1">
+                            <label className="text-xs text-muted-foreground">{v.label}=</label>
+                            <Input
+                              placeholder={v.placeholder ?? v.key}
+                              className="h-8 w-20 text-sm font-mono"
+                              value={templateVars[v.key] ?? ''}
+                              onChange={(e) => setTemplateVars((prev) => ({ ...prev, [v.key]: e.target.value }))}
+                            />
+                          </div>
+                        ))}
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-8 text-xs"
+                          onClick={() => {
+                            const built = buildLatexFromTemplate(formula.latex, templateVars);
+                            if (built.trim()) {
+                              handleInsert(built);
+                              setTemplateVars({});
+                            }
+                          }}
+                        >
+                          Insert
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className="flex items-center justify-between gap-4 p-2.5 rounded-md border border-muted-foreground/15 hover:bg-muted/40 cursor-pointer transition-colors"
+                      onClick={() => setLatex(formula.latex)}
+                    >
+                      <span className="text-sm font-medium shrink-0">{formula.label}</span>
+                      <div className="flex-1 overflow-hidden text-right min-h-[28px] flex items-center justify-end">
+                        {open && <FormulaRenderer latex={formula.latex} displayMode={false} />}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-7 px-2.5 text-xs shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleInsert(formula.latex);
+                        }}
+                      >
+                        Insert
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

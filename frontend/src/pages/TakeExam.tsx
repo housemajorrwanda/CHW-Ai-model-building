@@ -414,7 +414,7 @@ export default function TakeExam() {
                                 <div>
                                   <p className="text-sm font-medium">{sub.text}</p>
                                   <span className="text-xs text-muted-foreground">
-                                    [{sub.points} {sub.points === 1 ? 'mark' : 'marks'}]
+                                    [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
                                   </span>
                                 </div>
                               </div>

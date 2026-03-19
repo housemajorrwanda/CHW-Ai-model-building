@@ -52,7 +52,7 @@ export default function Login() {
             <GraduationCap className="h-8 w-8 text-primary-foreground" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight">MathGrade</h1>
-          <p className="text-muted-foreground mt-2">AI-Powered Exam Grading System</p>
+          <p className="text-muted-foreground mt-2">Exam Grading System</p>
         </div>
 
         <Card className="border-border/50 shadow-xl">

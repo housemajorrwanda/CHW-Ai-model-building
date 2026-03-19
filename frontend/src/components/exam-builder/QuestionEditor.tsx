@@ -168,7 +168,7 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
 
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col min-h-0 flex-1 space-y-6">
       {/* Question Header */}
       <Card>
         <CardHeader>
@@ -207,12 +207,12 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
         </CardContent>
       </Card>
 
-      {/* Rich Text Editor */}
-      <Card>
-        <CardHeader>
+      {/* Rich Text Editor - expands to fill space (vertical and horizontal) */}
+      <Card className="flex-1 flex flex-col min-h-[400px] w-full min-w-0">
+        <CardHeader className="flex-none">
           <CardTitle className="text-base">Question Text</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="flex-1 flex flex-col min-h-0 min-w-0 space-y-4 w-full">
           {/* Toolbar */}
           <ToolbarPanel editor={editor} question={question} onUpdate={onUpdate} />
           {/* Edit equation dialog (opened when clicking an existing math node) */}
@@ -235,9 +235,11 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
             />
           )}
 
-          {/* Editor Area */}
-          <div ref={editorRef} className="border rounded-lg min-h-[200px] focus-within:ring-2 focus-within:ring-primary/20 overflow-hidden relative">
-            <EditorContent editor={editor} className="p-4 prose prose-sm max-w-none" />
+          {/* Editor Area - fills remaining vertical and horizontal space */}
+          <div ref={editorRef} className="flex-1 min-h-[300px] w-full min-w-0 border rounded-lg focus-within:ring-2 focus-within:ring-primary/20 overflow-hidden relative flex flex-col">
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col p-4 w-full prose-editor-expand">
+              <EditorContent editor={editor} className="prose prose-sm max-w-none w-full flex-1 min-w-0" />
+            </div>
             {editor && latexCompletion.completionState && (
               <EditorLatexCompletionsList
                 editor={editor}

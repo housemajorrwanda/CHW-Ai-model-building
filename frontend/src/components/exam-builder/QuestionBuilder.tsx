@@ -251,8 +251,8 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
           )}
         </div>
 
-        {/* Question Editor */}
-        <div className="flex-1 overflow-y-auto p-6">
+        {/* Question Editor - fills remaining space (horizontal and vertical) */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-y-auto p-6">
           {activeQuestion ? (
             <QuestionEditor
               question={activeQuestion}
