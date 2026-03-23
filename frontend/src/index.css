@@ -378,6 +378,11 @@
   margin: 1em 0;
 }
 
+/* MathLive: keep virtual keyboard above Radix dialogs (z-50) */
+body > .ML__keyboard {
+  z-index: 200 !important;
+}
+
 /* Auto-expanding editor – fill available space for question/answer editing */
 .prose-editor-expand .ProseMirror {
   min-height: min(50vh, 400px);

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { VisualMathField, type VisualMathFieldHandle } from './VisualMathField';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -11,7 +12,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { FunctionSquare, AlignCenter, AlignLeft, Pencil, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { FunctionSquare, AlignCenter, AlignLeft, Pencil, Info, ChevronDown, ChevronUp, PenLine, Keyboard } from 'lucide-react';
 import { useLatexAutocomplete, LatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { cn } from '@/lib/utils';
 
@@ -115,6 +116,18 @@ const LARGE_OPS_MORE: { label: string; latex: string; cursorOffset: number }[] =
   { label: '∮', latex: '\\oint_{}^{}', cursorOffset: 9 },
 ];
 
+const FORMULA_INPUT_MODE_KEY = 'mathgrade:formula-input-mode';
+
+function getStoredFormulaInputMode(): 'visual' | 'latex' {
+  try {
+    const v = localStorage.getItem(FORMULA_INPUT_MODE_KEY);
+    if (v === 'latex' || v === 'visual') return v;
+  } catch {
+    /* private mode */
+  }
+  return 'visual';
+}
+
 function FormulaRenderer({ latex, displayMode }: { latex: string; displayMode: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -162,7 +175,20 @@ export function FormulaInserter({
   const [showMoreFunctions, setShowMoreFunctions] = useState(false);
   const [showMoreLargeOps, setShowMoreLargeOps] = useState(false);
   const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
+  const [formulaInputMode, setFormulaInputMode] = useState<'visual' | 'latex'>(() =>
+    typeof window !== 'undefined' ? getStoredFormulaInputMode() : 'visual'
+  );
+  const mathFieldRef = useRef<VisualMathFieldHandle>(null);
   const latexAutocomplete = useLatexAutocomplete(latex, setLatex);
+
+  const persistFormulaInputMode = useCallback((mode: 'visual' | 'latex') => {
+    setFormulaInputMode(mode);
+    try {
+      localStorage.setItem(FORMULA_INPUT_MODE_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const buildLatexFromTemplate = (templateLatex: string, vars: Record<string, string>) => {
     let out = templateLatex;
@@ -202,6 +228,19 @@ export function FormulaInserter({
     [latex, cursorStart, cursorEnd, latexAutocomplete.ref]
   );
 
+  /** Palettes: visual editor uses MathLive insert; LaTeX tab uses textarea cursor. */
+  const insertSnippet = useCallback(
+    (snippet: string, textareaOffset: number) => {
+      if (formulaInputMode === 'visual' && mathFieldRef.current) {
+        mathFieldRef.current.insert(snippet);
+        setError('');
+        return;
+      }
+      insertAtCursor(snippet, textareaOffset);
+    },
+    [formulaInputMode, insertAtCursor]
+  );
+
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       latexAutocomplete.onChange(e);
@@ -239,7 +278,7 @@ export function FormulaInserter({
   const isEditing = Boolean(onUpdate && open && initialLatex !== undefined);
 
   const dialogContent = (
-    <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+    <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader className="space-y-1">
           <DialogTitle className="text-lg flex items-center gap-2">
             {isEditing ? (
@@ -255,9 +294,12 @@ export function FormulaInserter({
             )}
           </DialogTitle>
           {!editOnly && (
-            <p className="text-sm text-muted-foreground flex items-center gap-1.5 pt-0.5">
-              <Info className="h-3.5 w-3.5 shrink-0" />
-              Click any equation in the document to edit it later.
+            <p className="text-sm text-muted-foreground flex items-start gap-1.5 pt-0.5">
+              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                Use the <strong>Visual editor</strong> (Word-style) or <strong>LaTeX</strong> tab — your choice is
+                remembered on this device. Click any equation in the document to edit it later.
+              </span>
             </p>
           )}
         </DialogHeader>
@@ -294,6 +336,66 @@ export function FormulaInserter({
           </TabsList>
 
           <TabsContent value="write" className="mt-3 space-y-3">
+            {/* Visual (Word-like) vs LaTeX — preference saved on this device */}
+            <Tabs
+              value={formulaInputMode}
+              onValueChange={(v) => persistFormulaInputMode(v === 'latex' ? 'latex' : 'visual')}
+              className="w-full"
+            >
+              <TabsList className="grid w-full grid-cols-2 h-auto p-1 gap-1">
+                <TabsTrigger value="visual" className="text-xs sm:text-sm gap-2 py-2">
+                  <PenLine className="h-3.5 w-3.5 shrink-0" />
+                  Visual editor
+                </TabsTrigger>
+                <TabsTrigger value="latex" className="text-xs sm:text-sm gap-2 py-2">
+                  <Keyboard className="h-3.5 w-3.5 shrink-0" />
+                  LaTeX (advanced)
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="visual" className="mt-3 space-y-3">
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Build equations like in Microsoft Word: tap the box below, use the on-screen keyboard, or use the
+                  structure buttons under this section. No LaTeX knowledge needed.
+                </p>
+                <VisualMathField
+                  ref={mathFieldRef}
+                  value={latex}
+                  onChange={(v) => {
+                    setLatex(v);
+                    setError('');
+                  }}
+                  className="w-full"
+                />
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    How it appears in the exam (KaTeX)
+                  </span>
+                  <div className="min-h-[56px] py-3 px-4 rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center">
+                    {displayMode ? (
+                      <FormulaRenderer latex={latex} displayMode={true} />
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        Sample: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </TabsContent>
+              <TabsContent value="latex" className="mt-3">
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  Type LaTeX commands directly. Use the buttons below to insert snippets, or switch back to the visual
+                  editor anytime.
+                </p>
+              </TabsContent>
+            </Tabs>
+
+            <p className="text-xs text-muted-foreground pt-1 border-t">
+              Structures &amp; symbols — tap to insert into the{' '}
+              {formulaInputMode === 'visual'
+                ? 'visual editor (top).'
+                : 'LaTeX box (below), at your cursor.'}
+            </p>
+
             {/* Structures first (basic + … more) */}
             <div className="space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Structures</span>
@@ -305,7 +407,7 @@ export function FormulaInserter({
                     variant="outline"
                     size="sm"
                     className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertAtCursor(s.latex, s.cursorOffset)}
+                    onClick={() => insertSnippet(s.latex, s.cursorOffset)}
                   >
                     {s.label}
                   </Button>
@@ -330,7 +432,7 @@ export function FormulaInserter({
                       variant="outline"
                       size="sm"
                       className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertAtCursor(s.latex, s.cursorOffset)}
+                      onClick={() => insertSnippet(s.latex, s.cursorOffset)}
                     >
                       {s.label}
                     </Button>
@@ -350,7 +452,7 @@ export function FormulaInserter({
                     variant="outline"
                     size="sm"
                     className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertAtCursor(b.latex, b.cursorOffset)}
+                    onClick={() => insertSnippet(b.latex, b.cursorOffset)}
                   >
                     {b.label}
                   </Button>
@@ -375,7 +477,7 @@ export function FormulaInserter({
                       variant="outline"
                       size="sm"
                       className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertAtCursor(b.latex, b.cursorOffset)}
+                      onClick={() => insertSnippet(b.latex, b.cursorOffset)}
                     >
                       {b.label}
                     </Button>
@@ -395,7 +497,7 @@ export function FormulaInserter({
                     variant="outline"
                     size="sm"
                     className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertAtCursor(f.latex, f.cursorOffset)}
+                    onClick={() => insertSnippet(f.latex, f.cursorOffset)}
                   >
                     {f.label}
                   </Button>
@@ -420,7 +522,7 @@ export function FormulaInserter({
                       variant="outline"
                       size="sm"
                       className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertAtCursor(f.latex, f.cursorOffset)}
+                      onClick={() => insertSnippet(f.latex, f.cursorOffset)}
                     >
                       {f.label}
                     </Button>
@@ -440,7 +542,7 @@ export function FormulaInserter({
                     variant="outline"
                     size="sm"
                     className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertAtCursor(op.latex, op.cursorOffset)}
+                    onClick={() => insertSnippet(op.latex, op.cursorOffset)}
                   >
                     {op.label}
                   </Button>
@@ -465,7 +567,7 @@ export function FormulaInserter({
                       variant="outline"
                       size="sm"
                       className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertAtCursor(op.latex, op.cursorOffset)}
+                      onClick={() => insertSnippet(op.latex, op.cursorOffset)}
                     >
                       {op.label}
                     </Button>
@@ -483,7 +585,7 @@ export function FormulaInserter({
                     key={sym}
                     type="button"
                     className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                    onClick={() => insertAtCursor(sym, sym.length)}
+                    onClick={() => insertSnippet(sym, sym.length)}
                   >
                     {sym}
                   </button>
@@ -507,7 +609,7 @@ export function FormulaInserter({
                         key={sym}
                         type="button"
                         className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                        onClick={() => insertAtCursor(sym, sym.length)}
+                        onClick={() => insertSnippet(sym, sym.length)}
                       >
                         {sym}
                       </button>
@@ -519,7 +621,7 @@ export function FormulaInserter({
                         key={sym}
                         type="button"
                         className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                        onClick={() => insertAtCursor(sym, sym.length)}
+                        onClick={() => insertSnippet(sym, sym.length)}
                       >
                         {sym}
                       </button>
@@ -532,7 +634,7 @@ export function FormulaInserter({
                         key={sym}
                         type="button"
                         className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                        onClick={() => insertAtCursor(sym, sym.length)}
+                        onClick={() => insertSnippet(sym, sym.length)}
                       >
                         {sym}
                       </button>
@@ -542,44 +644,48 @@ export function FormulaInserter({
               )}
             </div>
 
-            {/* LaTeX input */}
-            <div className="relative space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">LaTeX</label>
-              <Textarea
-                ref={latexAutocomplete.ref}
-                placeholder="Type equation here (e.g. x^2 + \\frac{1}{2})"
-                value={latex}
-                onChange={handleChange}
-                onSelect={handleSelect}
-                rows={3}
-                className="font-mono text-sm resize-none placeholder:text-muted-foreground/70 border-muted-foreground/20 focus-visible:ring-1"
-                onKeyDown={(e) => {
-                  latexAutocomplete.onKeyDown(e);
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInsert();
-                }}
-              />
-              {latexAutocomplete.showList && (
-                <LatexCompletionsList
-                  completions={latexAutocomplete.completions}
-                  selectedIndex={latexAutocomplete.selectedIndex}
-                  onSelect={(snippet) => latexAutocomplete.apply(snippet)}
-                />
-              )}
-            </div>
+            {formulaInputMode === 'latex' && (
+              <>
+                {/* LaTeX input */}
+                <div className="relative space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">LaTeX</label>
+                  <Textarea
+                    ref={latexAutocomplete.ref}
+                    placeholder="Type equation here (e.g. x^2 + \\frac{1}{2})"
+                    value={latex}
+                    onChange={handleChange}
+                    onSelect={handleSelect}
+                    rows={4}
+                    className="font-mono text-sm resize-none placeholder:text-muted-foreground/70 border-muted-foreground/20 focus-visible:ring-1"
+                    onKeyDown={(e) => {
+                      latexAutocomplete.onKeyDown(e);
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInsert();
+                    }}
+                  />
+                  {latexAutocomplete.showList && (
+                    <LatexCompletionsList
+                      completions={latexAutocomplete.completions}
+                      selectedIndex={latexAutocomplete.selectedIndex}
+                      onSelect={(snippet) => latexAutocomplete.apply(snippet)}
+                    />
+                  )}
+                </div>
 
-            {/* Live preview */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Live preview</span>
-              <div className="min-h-[56px] py-3 px-4 rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center">
-                {displayMode ? (
-                  <FormulaRenderer latex={latex} displayMode={true} />
-                ) : (
-                  <span className="text-sm text-muted-foreground">
-                    Sample: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
-                  </span>
-                )}
-              </div>
-            </div>
+                {/* Live preview */}
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Live preview</span>
+                  <div className="min-h-[56px] py-3 px-4 rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center">
+                    {displayMode ? (
+                      <FormulaRenderer latex={latex} displayMode={true} />
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        Sample: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
 
             {error && (
               <p className="text-sm text-destructive bg-destructive/10 px-2 py-1 rounded">{error}</p>
