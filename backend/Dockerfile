@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Slim deps for Railway image size limit (~4GB); see requirements-railway.txt
+COPY requirements-railway.txt .
+RUN pip install --no-cache-dir -r requirements-railway.txt
 
 # Copy application code
 COPY . .

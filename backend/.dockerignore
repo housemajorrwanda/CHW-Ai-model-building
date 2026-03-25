@@ -1,0 +1,41 @@
+# Python / local
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data & secrets (never bake into image)
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+!uploads/.gitkeep
+
+# Backups & copies
+*.backup*
+backend.bak/
+
+# Git / IDE
+.git
+.gitignore
+.vscode/
+.idea/
+
+# Tests & tooling (optional shrink)
+*.ipynb
+.ipynb_checkpoints/
+
+# Large / optional ML artifacts if present in tree
+*.h5
+*.pb
+*.pth
+*.onnx
+ml_models/**/models/*.pb
+ml_models/**/models/*.h5

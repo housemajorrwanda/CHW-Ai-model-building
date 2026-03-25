@@ -1,3 +1,6 @@
+# Railway / Docker: same as requirements.txt but without sentence-transformers
+# (PyTorch stack pushes the image over Railway's ~4GB limit). ML matcher falls back to TF-IDF.
+
 # Core dependencies
 sympy>=1.12
 
@@ -18,7 +21,6 @@ pyjwt>=2.8.0
 
 # OCR
 pytesseract>=0.3.10
-# easyocr>=1.7.0  # Commented out - too large for Railway (8.3GB+), use Tesseract instead
 
 # Image processing
 Pillow>=10.0.0
@@ -33,9 +35,7 @@ matplotlib>=3.7.0
 pydantic>=2.0.0
 pydantic[email]>=2.0.0
 
-# Machine Learning for enhanced grading (trained on Rwanda dataset)
-# Docker/Railway: Dockerfile installs requirements-railway.txt (no sentence-transformers) to stay under image size limits.
-sentence-transformers>=2.2.0
+# Machine Learning (lightweight — no sentence-transformers / PyTorch)
 scikit-learn>=1.3.0
 pandas>=2.0.0
 numpy>=1.24.0
