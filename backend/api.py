@@ -51,12 +51,21 @@ app = FastAPI(
 # CORS middleware for React frontend
 _default_origins = "http://localhost:8080,http://localhost:5173,http://localhost:3000"
 allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()]
+# Optional: Railway hostnames can include a random segment (e.g. ...-production-aa10...).
+# Set e.g. https://distinguished-charm-production-.*\.up\.railway\.app to match that frontend.
+_cors_origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX", "").strip() or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+logger.info(
+    "CORS: allow_origins=%s allow_origin_regex=%s",
+    allowed_origins,
+    _cors_origin_regex or "(none)",
 )
 
 # Initialize OCR processor
