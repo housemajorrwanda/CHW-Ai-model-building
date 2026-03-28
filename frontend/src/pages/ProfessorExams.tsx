@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { examsAPI, submissionsAPI, coursesAPI } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FileText, Eye, EyeOff, Users, Plus, Loader2, Edit, Trash2, Download, BookOpenCheck, ListChecks } from 'lucide-react';
@@ -62,6 +63,7 @@ export default function ProfessorExams() {
   const [deletingExamId, setDeletingExamId] = useState<string | null>(null);
   const [downloadDialog, setDownloadDialog] = useState<{ isOpen: boolean; exam: Exam | null }>({ isOpen: false, exam: null });
   const [isDownloading, setIsDownloading] = useState(false);
+  const [pdfPaper, setPdfPaper] = useState<'a4' | 'letter' | 'legal'>('a4');
 
   useEffect(() => {
     loadData();
@@ -127,7 +129,7 @@ export default function ProfessorExams() {
     setIsDownloading(true);
     setDownloadDialog({ isOpen: false, exam: null });
     try {
-      const blob = await examsAPI.downloadPDF(exam.id, includeSolutions);
+      const blob = await examsAPI.downloadPDF(exam.id, includeSolutions, pdfPaper);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -486,9 +488,25 @@ export default function ProfessorExams() {
               Download PDF — {downloadDialog.exam?.title}
             </DialogTitle>
             <DialogDescription>
-              Choose what to include in the downloaded PDF.
+              Choose paper size and what to include in the downloaded PDF.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="space-y-2 pt-2">
+            <Label htmlFor="pdf-paper-exams" className="text-xs text-muted-foreground">
+              Paper size
+            </Label>
+            <Select value={pdfPaper} onValueChange={(v) => setPdfPaper(v as 'a4' | 'letter' | 'legal')}>
+              <SelectTrigger id="pdf-paper-exams" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="a4">A4 (210 × 297 mm)</SelectItem>
+                <SelectItem value="letter">US Letter (8.5 × 11 in)</SelectItem>
+                <SelectItem value="legal">US Legal (8.5 × 14 in)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           <div className="grid grid-cols-1 gap-3 pt-2">
             <button

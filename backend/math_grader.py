@@ -71,9 +71,29 @@ class MathGrader:
             gold_steps: List of gold standard steps with their point values
             tolerance: Numerical tolerance for floating point comparisons
         """
-        self.gold_steps = gold_steps
+        self.gold_steps = self._expand_arrow_gold_steps(gold_steps)
         self.tolerance = tolerance
-        self.total_points = sum(step.points for step in gold_steps)
+        self.total_points = sum(step.points for step in self.gold_steps)
+
+    def _expand_arrow_gold_steps(self, steps: List[Step]) -> List[Step]:
+        """
+        One rubric row like 'a \\Rightarrow b' becomes two steps with split points so
+        each clause is matched once and the total weight stays the same.
+        """
+        out: List[Step] = []
+        for s in steps:
+            content = s.content.strip()
+            parts = re.split(r"\s*(?:\\Rightarrow|⇒|=>)\s*", content)
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) <= 1:
+                out.append(s)
+                continue
+            sub_pts = s.points / len(parts)
+            for p in parts:
+                frag = p.strip().strip("$").strip()
+                if frag:
+                    out.append(Step(frag, sub_pts, s.required))
+        return out
     
     def grade(self, student_steps: List[str]) -> Dict:
         """
@@ -118,7 +138,7 @@ class MathGrader:
         Args:
             student_step: The student's step content
             student_index: Index of this step in student solution
-            used_gold_indices: Set of gold step indices already matched
+            used_gold_indices: Gold step indices already matched
             previous_evaluations: Previous step evaluations
         
         Returns:
@@ -166,10 +186,10 @@ class MathGrader:
             points = 0.0
             feedback = f"Incorrect: low similarity ({best_score:.2f})"
         
-        # Penalize if required earlier steps were missed
+        # Penalize if required earlier steps were missed (softer than 0.5 — avoids
+        # crushing correct algebra when ordering or naming differs slightly).
         if missing_required and status != StepStatus.INCORRECT:
-            # Reduce points if earlier required steps were skipped
-            points *= 0.5
+            points *= 0.72
             feedback += " (reduced due to missing earlier required steps)"
         
         return StepEvaluation(status, points, feedback, best_gold_index)
@@ -188,6 +208,8 @@ class MathGrader:
         # Check if any required gold steps before current position were not matched
         for i in range(min(current_index, len(self.gold_steps))):
             if self.gold_steps[i].required:
+                if self._implicit_var_definition_waived(i, previous_evaluations):
+                    continue
                 # Check if this step was matched in previous evaluations
                 matched = any(
                     eval_obj.matched_gold_step == i 
@@ -196,6 +218,48 @@ class MathGrader:
                 if not matched:
                     return True
         return False
+
+    def _implicit_var_definition_waived(
+        self, gold_idx: int, previous_evaluations: List[StepEvaluation]
+    ) -> bool:
+        """
+        Rubric lines like 'n, n+1' are satisfied when a later gold step (equation)
+        was already matched — students rarely spell out the tuple explicitly.
+        """
+        if not self._is_implicit_var_definition_step(self.gold_steps[gold_idx].content):
+            return False
+        return any(
+            ev.matched_gold_step is not None and ev.matched_gold_step > gold_idx
+            for ev in previous_evaluations
+        )
+
+    def _is_implicit_var_definition_step(self, content: str) -> bool:
+        t = content.strip()
+        t = re.sub(r"^\$\$?(.*?)\$\$?$", r"\1", t)
+        t = re.sub(r"\\,", "", t)
+        t = re.sub(r"\s+", "", t.lower())
+        return bool(re.match(r"^([a-z]),\1\+1$", t))
+
+    def _gold_step_variants(self, gold_inner: str) -> List[str]:
+        """Split compound gold (arrow chains) so each clause can match independently."""
+        t = gold_inner.strip()
+        if not t:
+            return [t]
+        seen = set()
+        out: List[str] = []
+
+        def add(s: str) -> None:
+            s = s.strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+
+        add(t)
+        parts = re.split(r"\s*(?:\\Rightarrow|⇒|=>)\s*", t)
+        if len(parts) > 1:
+            for p in parts:
+                add(p)
+        return out
     
     def _normalize_math_text(self, text: str) -> str:
         """Normalize mathematical text for comparison"""
@@ -215,74 +279,160 @@ class MathGrader:
         text = re.sub(r'\s*([+\-*/=])\s*', r'\1', text)
         
         return text.strip()
-    
+
+    def _student_match_variants(self, student_step: str) -> List[str]:
+        """
+        Build alternate strings for matching OCR / show-your-work answers.
+        Gold steps are often bare equations (2x = 18); students add labels like
+        'Add 8 to both sides:' or 'Final answer: x = 9'.
+        """
+        raw = student_step.strip()
+        if not raw:
+            return [raw]
+        seen = set()
+        out: List[str] = []
+
+        def add(s: str) -> None:
+            s = s.strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+
+        add(raw)
+        # Drop common instructional prefixes (whole string)
+        stripped = re.sub(
+            r"(?i)^(?:final\s+answer\s*:\s*|therefore\s*,?\s*|thus\s*,?\s*|so\s*,?\s*|hence\s*,?\s*)",
+            "",
+            raw,
+        ).strip()
+        add(stripped)
+        # Text after the last colon often holds the equation (label : equation)
+        if ":" in raw and "=" in raw:
+            tail = raw[raw.rfind(":") + 1 :].strip()
+            add(tail)
+        # Pull out equation-like spans (at least one =, alphanumeric math)
+        for m in re.finditer(
+            r"[0-9a-zA-Z^+\-*/().,\s]{1,64}\s*=\s*[0-9a-zA-Z^+\-*/().,\s]+",
+            raw,
+        ):
+            frag = m.group(0).strip()
+            if len(frag) >= 3:
+                add(frag)
+        # Single-line cleanup: keep longest '=' segment if multiple
+        if raw.count("=") >= 1:
+            parts = re.split(r"\s+(?=[0-9a-zA-Z(]+\s*=)", raw)
+            for p in parts:
+                if "=" in p:
+                    add(p.strip())
+        return out if out else [raw]
+
     def _compare_steps(self, student_step: str, gold_step: str) -> Tuple[float, str]:
         """
-        Compare a student step with a gold step.
-        
-        Returns:
-            Tuple of (score 0-1, match_type description)
+        Compare a student step with a gold step, trying several interpretations
+        of the student text (OCR labels, final-answer lines, equation-only).
         """
-        # Normalize whitespace and remove LaTeX delimiters for comparison
+        best: Tuple[float, str] = (0.0, "no match")
+        for variant in self._student_match_variants(student_step):
+            score, desc = self._compare_steps_single(variant, gold_step)
+            if score > best[0]:
+                best = (score, desc)
+        return best
+
+    def _compare_steps_single(self, student_step: str, gold_step: str) -> Tuple[float, str]:
+        """
+        Compare one candidate student string to a gold step.
+        Tries each clause of compound gold (e.g. a \\Rightarrow b) separately.
+        """
         student_step = student_step.strip()
         gold_step = gold_step.strip()
-        
-        # Remove LaTeX delimiters for text comparison
-        student_clean = re.sub(r'^\$\$?(.*?)\$\$?$', r'\1', student_step)
-        gold_clean = re.sub(r'^\$\$?(.*?)\$\$?$', r'\1', gold_step)
-        
-        # Normalize math symbols for better matching
+
+        student_clean = re.sub(r"^\$\$?(.*?)\$\$?$", r"\1", student_step)
+        gold_clean = re.sub(r"^\$\$?(.*?)\$\$?$", r"\1", gold_step)
+
         student_normalized = self._normalize_math_text(student_clean)
-        gold_normalized = self._normalize_math_text(gold_clean)
-        
-        # 1. Exact match (after cleaning)
-        if student_step == gold_step or student_clean == gold_clean:
+        best: Tuple[float, str] = (0.0, "no match")
+
+        for gv in self._gold_step_variants(gold_clean):
+            gvn = self._normalize_math_text(gv)
+            pair = self._compare_steps_single_against_gold_fragment(
+                student_step, student_clean, student_normalized, gold_step, gv, gvn
+            )
+            if pair[0] > best[0]:
+                best = pair
+        return best
+
+    def _compare_steps_single_against_gold_fragment(
+        self,
+        student_step: str,
+        student_clean: str,
+        student_normalized: str,
+        gold_step_full: str,
+        gold_frag: str,
+        gold_normalized: str,
+    ) -> Tuple[float, str]:
+        """Compare student to one gold fragment (possibly one side of \\Rightarrow)."""
+        if student_step == gold_step_full or student_clean == gold_frag:
             return (1.0, "exact match")
-        
-        # 1.5. Normalized exact match
+
         if student_normalized == gold_normalized:
             return (1.0, "normalized exact match")
 
-        # 1.6. Science synonym match (CO2 ↔ carbon dioxide, ATP ↔ adenosine triphosphate, etc.)
         if _SCIENCE_SYNONYMS_AVAILABLE:
-            syn_score = _syn_score(student_clean, gold_clean)
+            syn_score = _syn_score(student_clean, gold_frag)
             if syn_score >= 0.85:
                 return (syn_score, "science synonym match")
 
-        # 2. Try mathematical equivalence (using normalized versions)
         math_score = self._check_mathematical_equivalence(student_normalized, gold_normalized)
         if math_score > 0:
             return (math_score, "mathematically equivalent")
-        
-        # Also try with original (in case normalization broke something)
+
         if math_score == 0:
-            math_score = self._check_mathematical_equivalence(student_step, gold_step)
+            math_score = self._check_mathematical_equivalence(student_step, gold_frag)
             if math_score > 0:
                 return (math_score, "mathematically equivalent (original)")
-        
-        # 3. Check if it's a valid intermediate derivation
+
         derivation_score = self._check_derivation(student_normalized, gold_normalized)
         if derivation_score > 0:
             return (derivation_score, "valid intermediate derivation")
-        
-        # 4. Check if one contains the other (for partial matches)
-        # Use normalized versions for better matching
-        student_core = re.sub(r'[=+\-*/()\[\]{}]', '', student_normalized.lower())
-        gold_core = re.sub(r'[=+\-*/()\[\]{}]', '', gold_normalized.lower())
-        
+
+        student_core = re.sub(r"[=+\-*/()\[\]{}]", "", student_normalized.lower())
+        gold_core = re.sub(r"[=+\-*/()\[\]{}]", "", gold_normalized.lower())
+
         if student_core and gold_core:
             if gold_core in student_core or student_core in gold_core:
-                # Calculate overlap ratio
                 overlap = min(len(student_core), len(gold_core)) / max(len(student_core), len(gold_core))
                 if overlap > 0.6:
                     return (overlap * 0.7, "contains matching content")
-        
-        # 5. Partial text similarity (for explanations) - use normalized
+
         text_similarity = self._text_similarity(student_normalized, gold_normalized)
-        if text_similarity > 0.5:  # Lowered threshold from 0.7
+        if text_similarity > 0.5:
             return (text_similarity * 0.6, "similar explanation")
-        
+
         return (0.0, "no match")
+
+    def _equations_equal_modulo_symbol_rename(self, seq: Eq, geq: Eq) -> bool:
+        """True if equations match after renaming a single student variable to gold's (e.g. x vs n)."""
+        try:
+            s_syms = seq.free_symbols
+            g_syms = geq.free_symbols
+            if not s_syms or not g_syms:
+                return False
+            if s_syms == g_syms:
+                if simplify(seq.lhs - geq.lhs) == 0 and simplify(seq.rhs - geq.rhs) == 0:
+                    return True
+                if simplify(seq.lhs - geq.rhs) == 0 and simplify(seq.rhs - geq.lhs) == 0:
+                    return True
+                return False
+            if len(s_syms) == 1 and len(g_syms) == 1:
+                ss, gs = next(iter(s_syms)), next(iter(g_syms))
+                seq2 = seq.subs(ss, gs)
+                if simplify(seq2.lhs - geq.lhs) == 0 and simplify(seq2.rhs - geq.rhs) == 0:
+                    return True
+                if simplify(seq2.lhs - geq.rhs) == 0 and simplify(seq2.rhs - geq.lhs) == 0:
+                    return True
+            return False
+        except Exception:
+            return False
     
     def _check_mathematical_equivalence(self, student: str, gold: str) -> float:
         """
@@ -301,6 +451,8 @@ class MathGrader:
             
             # Handle equations separately
             if isinstance(student_expr, Eq) and isinstance(gold_expr, Eq):
+                if self._equations_equal_modulo_symbol_rename(student_expr, gold_expr):
+                    return 1.0
                 # Compare both sides of equations
                 lhs_diff = simplify(student_expr.lhs - gold_expr.lhs)
                 rhs_diff = simplify(student_expr.rhs - gold_expr.rhs)

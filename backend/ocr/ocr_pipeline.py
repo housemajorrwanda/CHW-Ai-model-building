@@ -151,6 +151,7 @@ class OCRProcessor:
             extracted_steps.extend(self._segment_steps(text))
 
         steps = [step for step in (s.strip() for s in extracted_steps) if step]
+        steps = self._merge_instruction_and_equation_lines(steps)
         return OCRResult(
             combined_text="\n\n".join(t for t in combined_text if t),
             steps=steps,
@@ -419,6 +420,38 @@ class OCRProcessor:
 
         self._flush_buffer(buffer, steps)
         return steps
+
+    def _merge_instruction_and_equation_lines(self, steps: List[str]) -> List[str]:
+        """
+        OCR often returns 'Add 8 to both sides:' and '2x = 18' as separate steps.
+        Merge instruction-only lines with the following equation line so grading
+        compares full context and SymPy sees '2x = 18'.
+        """
+        if not steps:
+            return steps
+        merged: List[str] = []
+        i = 0
+        while i < len(steps):
+            cur = steps[i].strip()
+            if i + 1 < len(steps):
+                nxt = steps[i + 1].strip()
+                has_eq = "=" in nxt
+                cur_no_eq = "=" not in cur
+                # Instruction line: no '=', often ends with ':' or is short prose
+                looks_instruction = cur_no_eq and (
+                    cur.endswith(":")
+                    or re.match(
+                        r"(?i)^(add|subtract|multiply|divide|simplify|factor|expand|combine|substitute|solve|therefore|then|so|hence)\b",
+                        cur,
+                    )
+                )
+                if looks_instruction and has_eq:
+                    merged.append(f"{cur} {nxt}".strip())
+                    i += 2
+                    continue
+            merged.append(cur)
+            i += 1
+        return merged
 
     def _flush_buffer(self, buffer: List[str], steps: List[str]) -> None:
         if buffer:

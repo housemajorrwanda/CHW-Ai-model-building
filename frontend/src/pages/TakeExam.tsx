@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -6,10 +6,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AnswerEditor } from '@/components/exam-taker/AnswerEditor';
 import { QuestionDisplay } from '@/components/exam-taker/QuestionDisplay';
-import { Upload, X, CheckCircle2, FileText, Image as ImageIcon, AlertCircle, ChevronRight, FileUp } from 'lucide-react';
+import { Upload, X, CheckCircle2, FileText, AlertCircle, ChevronRight, FileUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-import { examsAPI, submissionsAPI } from '@/lib/api';
+import { examsAPI, submissionsAPI, type AnswerPdfPreviewResponse } from '@/lib/api';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -29,6 +30,33 @@ interface Answer {
   subAnswers: SubAnswer[];
   /** Uploaded handwritten images (always at parent-question level) */
   images: File[];
+}
+
+/** API shape for GET /exams/:id on the take-exam page */
+interface TakeExamPayload {
+  title: string;
+  description?: string | null;
+  totalPoints?: number;
+  questions?: {
+    id: string;
+    number?: number;
+    points?: number;
+    text?: string;
+    richContent?: string;
+    attachments?: Array<{
+      id: string;
+      filePath: string;
+      filename: string;
+      attachmentType?: string;
+    }>;
+    subQuestions?: {
+      id: string;
+      number?: number;
+      text?: string;
+      richContent?: unknown;
+      points?: number;
+    }[];
+  }[];
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -57,22 +85,25 @@ export default function TakeExam() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   // Full-exam answer PDF (covers all questions, page N = question N)
   const [fullAnswerPdf, setFullAnswerPdf] = useState<File | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<AnswerPdfPreviewResponse | null>(null);
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
 
   // ── Exam query ─────────────────────────────────────────────────────────
 
   const { data: exam, isLoading: examLoading } = useQuery({
     queryKey: ['exam', examId],
-    queryFn: () => examsAPI.getById(examId!),
+    queryFn: () => examsAPI.getById(examId!) as Promise<TakeExamPayload>,
     enabled: !!examId,
   });
 
   // Initialise one Answer entry per top-level question
   if (exam?.questions && answers.length === 0) {
-    const initial: Answer[] = exam.questions.map((q: any, idx: number) => ({
+    const initial: Answer[] = exam.questions.map((q, idx: number) => ({
       questionId: q.id || `q-${idx}`,
       questionNumber: q.number || idx + 1,
       typedAnswer: '',
-      subAnswers: (q.subQuestions ?? []).map((sq: any, si: number) => ({
+      subAnswers: (q.subQuestions ?? []).map((sq, si: number) => ({
         subQuestionId: sq.id,
         subNumber: si + 1,
         typedAnswer: '',
@@ -81,6 +112,33 @@ export default function TakeExam() {
     }));
     setAnswers(initial);
   }
+
+  useEffect(() => {
+    if (!fullAnswerPdf || !examId) {
+      setPdfPreview(null);
+      setPdfPreviewError(null);
+      setPdfPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPdfPreviewLoading(true);
+    setPdfPreviewError(null);
+    setPdfPreview(null);
+    examsAPI
+      .previewAnswerPdf(examId, fullAnswerPdf)
+      .then((data) => {
+        if (!cancelled) setPdfPreview(data);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setPdfPreviewError(e.message || 'Could not analyze PDF');
+      })
+      .finally(() => {
+        if (!cancelled) setPdfPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fullAnswerPdf, examId]);
 
   // ── Submit ─────────────────────────────────────────────────────────────
 
@@ -320,8 +378,10 @@ export default function TakeExam() {
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-sm">Upload Full Answer Sheet (PDF)</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Have all your answers in one document? Upload a PDF — page&nbsp;1&nbsp;=&nbsp;Q1, page&nbsp;2&nbsp;=&nbsp;Q2, etc.
-                  Typed PDFs are read directly (no OCR errors).
+                  Have all your answers in one document? Upload here (not under a single question). Use one PDF page per main question
+                  (page&nbsp;1&nbsp;=&nbsp;Q1, page&nbsp;2&nbsp;=&nbsp;Q2, …), or a single page with clear headings such as{' '}
+                  <span className="font-mono">1.</span>, <span className="font-mono">Question 2</span>, or{' '}
+                  <span className="font-mono">Q3</span> on new lines. Typed PDFs are read directly; scans use OCR.
                 </p>
                 {fullAnswerPdf ? (
                   <div className="mt-2 flex items-center gap-2">
@@ -336,7 +396,11 @@ export default function TakeExam() {
                       size="sm"
                       variant="ghost"
                       className="text-destructive hover:text-destructive"
-                      onClick={() => setFullAnswerPdf(null)}
+                      onClick={() => {
+                        setFullAnswerPdf(null);
+                        setPdfPreview(null);
+                        setPdfPreviewError(null);
+                      }}
                     >
                       <X className="h-4 w-4" />
                     </Button>
@@ -360,6 +424,84 @@ export default function TakeExam() {
                     </label>
                   </div>
                 )}
+
+                {fullAnswerPdf && (
+                  <div className="mt-3 space-y-2 border-t border-primary/15 pt-3">
+                    <p className="text-xs font-medium text-foreground">Routing preview</p>
+                    {pdfPreviewLoading && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-2">
+                        <span className="h-3.5 w-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin shrink-0" />
+                        Analyzing PDF…
+                      </p>
+                    )}
+                    {pdfPreviewError && (
+                      <Alert variant="destructive" className="py-2">
+                        <AlertTitle className="text-xs">Preview failed</AlertTitle>
+                        <AlertDescription className="text-xs">{pdfPreviewError}</AlertDescription>
+                      </Alert>
+                    )}
+                    {pdfPreview && !pdfPreviewLoading && (
+                      <div className="rounded-md border bg-background/80 text-xs space-y-2 p-3">
+                        <p className="text-muted-foreground leading-snug">{pdfPreview.summary}</p>
+                        {pdfPreview.warnings.length > 0 && (
+                          <Alert variant="default" className="py-2 border-amber-500/40 bg-amber-500/5">
+                            <AlertTitle className="text-xs text-amber-900 dark:text-amber-200">
+                              Heads up
+                            </AlertTitle>
+                            <AlertDescription className="text-xs text-amber-900/90 dark:text-amber-100/90">
+                              <ul className="list-disc pl-4 space-y-0.5 mt-1">
+                                {pdfPreview.warnings.map((w, i) => (
+                                  <li key={i}>{w}</li>
+                                ))}
+                              </ul>
+                            </AlertDescription>
+                          </Alert>
+                        )}
+                        <ul className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                          {pdfPreview.rows.map((row, rowIdx) => (
+                            <li
+                              key={`pdf-preview-row-${rowIdx}-${row.questionNumber}-${row.source}`}
+                              className="rounded border border-border/60 bg-muted/30 px-2 py-1.5"
+                            >
+                              <span className="font-semibold">{row.questionLabel}</span>
+                              <span className="text-muted-foreground">
+                                {' '}
+                                ·{' '}
+                                {row.source === 'missing_page'
+                                  ? 'no page'
+                                  : row.source === 'single_page_numbered_sections'
+                                    ? 'from numbered sections'
+                                    : row.source.replace(/^pdf_page_/, 'page ')}
+                              </span>
+                              {row.note && (
+                                <span className="block text-amber-700 dark:text-amber-300 mt-0.5">
+                                  {row.note}
+                                </span>
+                              )}
+                              {row.subParts.length > 0 && (
+                                <span className="block text-muted-foreground mt-0.5 pl-0">
+                                  {row.subParts
+                                    .map((sp) => {
+                                      const label = sp.part ? `(${sp.part})` : 'Answer';
+                                      const mode =
+                                        sp.delivery === 'typed_text'
+                                          ? 'typed'
+                                          : 'OCR at submit';
+                                      if (sp.chars != null) {
+                                        return `${label} ~${sp.chars} chars · ${mode}`;
+                                      }
+                                      return `${label} · ${mode}`;
+                                    })
+                                    .join(' · ')}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>
@@ -375,7 +517,13 @@ export default function TakeExam() {
                 questionText={currentQuestion.richContent || currentQuestion.text}
                 questionPoints={currentQuestion.points || 0}
                 attachments={currentQuestion.attachments}
-                subQuestions={currentQuestion.subQuestions}
+                subQuestions={(currentQuestion.subQuestions ?? []).map((sq, si) => ({
+                  id: sq.id,
+                  number: sq.number ?? si + 1,
+                  text: sq.text ?? '',
+                  richContent: sq.richContent,
+                  points: sq.points ?? 0,
+                }))}
               />
 
               {/* Answer section */}
@@ -398,7 +546,7 @@ export default function TakeExam() {
                     {/* ── Typed answer tab ──────────────────────────── */}
                     <TabsContent value="typed" className="p-6 pt-4 space-y-6">
                       <p className="text-xs text-muted-foreground bg-muted/50 border border-border/50 rounded-md px-3 py-2">
-                        <strong>Tip for grading:</strong> Put each step on a new line or number steps (1. …, 2. …) so the system can score them accurately.
+                        <strong>Tip:</strong> Put each step on a new line or number steps (1. …, 2. …) so the system can score them accurately.
                       </p>
                       {hasSubQuestions ? (
                         /* Per-sub-question editors */

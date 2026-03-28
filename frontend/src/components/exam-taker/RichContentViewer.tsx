@@ -12,6 +12,7 @@ import { Image } from '@tiptap/extension-image';
 import { Mathematics, migrateMathStrings } from '@tiptap/extension-mathematics';
 import 'katex/dist/katex.min.css';
 import { useEffect } from 'react';
+import { GraphExtension } from '@/components/exam-builder/extensions/GraphExtension';
 
 interface RichContentViewerProps {
   content: string | object | null | undefined;
@@ -28,6 +29,7 @@ export function RichContentViewer({ content, className }: RichContentViewerProps
       TableHeader,
       TableCell,
       Image.configure({ allowBase64: true }),
+      GraphExtension,
       Mathematics,
     ],
     content: resolveContent(content),

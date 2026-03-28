@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
   Clock, CheckCircle2, XCircle, AlertCircle, Loader2,
-  Edit2, Save, X, CheckCircle, ThumbsDown,
+  Edit2, Save, X, CheckCircle, ThumbsDown, FileDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -18,6 +18,22 @@ import { submissionsAPI, examsAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** Status badge colours */
 const STATUS_STYLES: Record<string, string> = {
@@ -49,6 +65,11 @@ export default function SubmissionDetail() {
   const [editingSteps, setEditingSteps] = useState<
     Record<string, { score?: number; feedback?: string }>
   >({});
+
+  const [markedPdfOpen, setMarkedPdfOpen] = useState(false);
+  const [markedPdfPaper, setMarkedPdfPaper] = useState<'a4' | 'letter' | 'legal'>('a4');
+  const [includeRefInPdf, setIncludeRefInPdf] = useState(false);
+  const [markedPdfLoading, setMarkedPdfLoading] = useState(false);
 
   // ── Queries ──────────────────────────────────────────────────────────────
 
@@ -91,7 +112,9 @@ export default function SubmissionDetail() {
     mutationFn: () => submissionsAPI.reject(id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['submission', id] });
-      toast.success('Submission reset — student can resubmit');
+      toast.success(
+        'Submission returned for review. The student no longer sees grades until you approve. You can still view their answers and adjust scores below.'
+      );
     },
     onError: (err: any) => toast.error('Failed to reject: ' + err.message),
   });
@@ -102,9 +125,47 @@ export default function SubmissionDetail() {
   const isGradedOrBeyond = ['graded', 'awaiting_approval', 'approved'].includes(
     submission?.status ?? ''
   );
-  const canEdit = isProfessor && isGradedOrBeyond;
-  const canApprove = isProfessor && ['graded', 'awaiting_approval'].includes(submission?.status ?? '');
-  const canReject  = isProfessor && ['graded', 'awaiting_approval', 'approved'].includes(submission?.status ?? '');
+  const hasGradingData = Boolean(
+    submission?.answers?.some((a: { gradingResult?: unknown }) => a.gradingResult)
+  );
+  /** Professors still see autograde details on pending after a reject (backend keeps grading rows). */
+  const showGradingUi = isGradedOrBeyond || (isProfessor && hasGradingData);
+  const canEdit = isProfessor && showGradingUi;
+  const canApprove =
+    isProfessor &&
+    (['graded', 'awaiting_approval'].includes(submission?.status ?? '') ||
+      (submission?.status === 'pending' && hasGradingData));
+  const canReject = isProfessor && ['graded', 'awaiting_approval', 'approved'].includes(submission?.status ?? '');
+
+  const canDownloadMarkedPdf =
+    !!submission &&
+    (isProfessor || (user?.role === 'student' && isGradedOrBeyond));
+
+  const handleDownloadMarkedPdf = async () => {
+    if (!id || !submission || !exam) return;
+    setMarkedPdfLoading(true);
+    try {
+      const blob = await submissionsAPI.downloadMarkedPdf(id, {
+        paper: markedPdfPaper,
+        includeReferenceSolutions: isProfessor && includeRefInPdf,
+      });
+      if (blob.size === 0) throw new Error('Empty PDF');
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `marked_${exam.title.replace(/\s+/g, '_').slice(0, 50)}_${submission.studentName?.replace(/\s+/g, '_') || 'submission'}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast.success('Marked PDF downloaded');
+      setMarkedPdfOpen(false);
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to download marked PDF');
+    } finally {
+      setMarkedPdfLoading(false);
+    }
+  };
 
   const enterEditMode = () => {
     setEditingGrades({});
@@ -167,9 +228,23 @@ export default function SubmissionDetail() {
     );
   }
 
-  const scorePercentage = submission.totalScore
-    ? Math.round((submission.totalScore / submission.maxScore) * 100)
-    : 0;
+  const sumFromAnswerGrades =
+    submission.answers?.reduce(
+      (acc: number, a: { gradingResult?: { score?: number } }) =>
+        acc + (a.gradingResult?.score ?? 0),
+      0
+    ) ?? 0;
+  const effectiveTotalScore =
+    submission.totalScore != null
+      ? submission.totalScore
+      : hasGradingData
+        ? sumFromAnswerGrades
+        : null;
+
+  const scorePercentage =
+    effectiveTotalScore != null && submission.maxScore > 0
+      ? Math.round((effectiveTotalScore / submission.maxScore) * 100)
+      : 0;
 
   // ── Main render ───────────────────────────────────────────────────────────
 
@@ -195,6 +270,18 @@ export default function SubmissionDetail() {
           </Badge>
 
           {/* Professor action buttons */}
+          {canDownloadMarkedPdf && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setMarkedPdfOpen(true)}
+              className="shrink-0"
+            >
+              <FileDown className="h-4 w-4 mr-1.5" />
+              Marked PDF
+            </Button>
+          )}
+
           {isProfessor && (
             <div className="flex items-center gap-2">
               {/* Edit Grades toggle */}
@@ -280,8 +367,19 @@ export default function SubmissionDetail() {
         </div>
       )}
 
+      {isProfessor && submission.status === 'pending' && hasGradingData && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-lg border border-sky-200 bg-sky-50 text-sky-900 text-sm">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>
+            This attempt was returned for your review. The student does <strong>not</strong> see these
+            scores yet. You can edit marks, then <strong>Approve</strong> when ready—or they can still
+            resubmit if you ask them to.
+          </span>
+        </div>
+      )}
+
       {/* ── Score overview ── */}
-      {isGradedOrBeyond && (
+      {showGradingUi && (
         <Card className="animate-fade-up">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Overall Score</CardTitle>
@@ -289,7 +387,11 @@ export default function SubmissionDetail() {
           <CardContent>
             <div className="flex items-end gap-3 mb-4">
               <span className="text-5xl font-bold">
-                {submission.totalScore?.toFixed?.(1) ?? submission.totalScore}
+                {effectiveTotalScore != null
+                  ? Number.isInteger(effectiveTotalScore)
+                    ? effectiveTotalScore
+                    : effectiveTotalScore.toFixed(1)
+                  : '—'}
               </span>
               <span className="text-2xl text-muted-foreground mb-1">/ {submission.maxScore}</span>
               <span
@@ -540,7 +642,7 @@ export default function SubmissionDetail() {
       </div>
 
       {/* ── Bottom action bar (save / approve from bottom of long page) ── */}
-      {isProfessor && isGradedOrBeyond && (
+      {isProfessor && showGradingUi && (
         <>
           <Separator />
           <div className="flex items-center justify-between pb-4">
@@ -611,6 +713,75 @@ export default function SubmissionDetail() {
           </div>
         </>
       )}
+
+      <Dialog open={markedPdfOpen} onOpenChange={setMarkedPdfOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileDown className="h-5 w-5" />
+              Download marked exam PDF
+            </DialogTitle>
+            <DialogDescription>
+              Printable report: questions, the student&apos;s responses, scores, and step feedback.
+              {isProfessor && ' You can optionally include reference (model) solutions.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="marked-paper" className="text-xs text-muted-foreground">
+                Paper size
+              </Label>
+              <Select
+                value={markedPdfPaper}
+                onValueChange={(v) => setMarkedPdfPaper(v as 'a4' | 'letter' | 'legal')}
+              >
+                <SelectTrigger id="marked-paper">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="a4">A4 (210 × 297 mm)</SelectItem>
+                  <SelectItem value="letter">US Letter (8.5 × 11 in)</SelectItem>
+                  <SelectItem value="legal">US Legal (8.5 × 14 in)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {isProfessor && (
+              <label className="flex items-start gap-3 cursor-pointer text-sm">
+                <Checkbox
+                  id="include-ref-pdf"
+                  checked={includeRefInPdf}
+                  onCheckedChange={(c) => setIncludeRefInPdf(c === true)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">Include reference solutions</span>
+                  <span className="block text-muted-foreground text-xs mt-0.5">
+                    Appends model / gold solution steps after each question (instructor copy).
+                  </span>
+                </span>
+              </label>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMarkedPdfOpen(false)} disabled={markedPdfLoading}>
+              Cancel
+            </Button>
+            <Button onClick={handleDownloadMarkedPdf} disabled={markedPdfLoading || !exam}>
+              {markedPdfLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <FileDown className="h-4 w-4 mr-2" />
+                  Download
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

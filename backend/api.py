@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any
 import os
 import re
 import logging
@@ -70,6 +70,40 @@ logger.info(
 
 # Initialize OCR processor
 ocr_processor = OCRProcessor(language="en", dpi=300, psm=6, use_easyocr=False)
+
+
+def _include_grading_in_submission_payload(submission: models.Submission, viewer: models.User) -> bool:
+    """
+    Whether API clients should receive per-question grading (scores, steps).
+    Students only get this once grading is in a published pipeline state.
+    Professors also get it on pending/grading when rows exist (e.g. after rejecting
+    autograde for manual review without wiping the student's work).
+    """
+    st = submission.status
+    if st in (
+        models.SubmissionStatus.GRADED,
+        models.SubmissionStatus.APPROVED,
+        models.SubmissionStatus.AWAITING_APPROVAL,
+    ):
+        return True
+    if viewer.role in (models.UserRole.PROFESSOR, models.UserRole.ADMIN):
+        if st in (models.SubmissionStatus.PENDING, models.SubmissionStatus.GRADING):
+            return bool(submission.grading_results)
+    return False
+
+
+def _step_result_max_score(evaluation: Any, gold_steps: List[GraderStep], step_number: int) -> int:
+    """
+    Points cap shown for each step row. When no rubric step matched (e.g. extra
+    OCR line), use the gold step at the same position so the UI does not show 0/0.
+    """
+    mi = evaluation.matched_gold_step
+    if mi is not None and 0 <= mi < len(gold_steps):
+        return int(round(gold_steps[mi].points))
+    if not gold_steps:
+        return 0
+    hint_idx = min(max(step_number - 1, 0), len(gold_steps) - 1)
+    return int(round(gold_steps[hint_idx].points))
 
 
 def _is_pdf_text_readable(text: str) -> bool:
@@ -1458,6 +1492,40 @@ def get_exam(
     )
 
 
+@app.post("/api/exams/{exam_id}/preview-answer-pdf")
+async def preview_exam_answer_pdf(
+    exam_id: str,
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Preview how a full-answer PDF will be routed to questions (no submission created).
+    """
+    fn = (file.filename or "").lower()
+    if not fn.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+    exam = (
+        db.query(models.Exam)
+        .options(selectinload(models.Exam.questions))
+        .filter(models.Exam.id == exam_id)
+        .first()
+    )
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    pdf_bytes = await file.read()
+    max_b = 25 * 1024 * 1024
+    if len(pdf_bytes) > max_b:
+        raise HTTPException(
+            status_code=400,
+            detail="PDF is too large for preview (max 25 MB).",
+        )
+
+    preview = build_answer_pdf_preview(pdf_bytes, exam, ocr_processor)
+    return preview
+
+
 @app.delete("/api/exams/{exam_id}")
 def delete_exam(
     exam_id: str,
@@ -1838,8 +1906,9 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
             all_latex.extend([m.strip() for m in matches if m and m.strip()])
     
     if all_latex:
-        # Join all LaTeX expressions, separated by spaces
-        latex_content = ' '.join([m.strip() for m in all_latex if m.strip()])
+        # Newlines keep separate math fields as separate lines so
+        # parse_answer_into_steps can treat each TipTap math node as its own step.
+        latex_content = "\n".join([m.strip() for m in all_latex if m.strip()])
     
     # Extract plain text content (strip HTML tags)
     text_content = re.sub(r'<[^>]+>', '', html_content)
@@ -1856,6 +1925,213 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
     return text_content, latex_content
 
 
+def _typed_answer_for_api_display(typed_answer: str) -> Tuple[str, Optional[str]]:
+    """
+    Stored TipTap/HTML → fields for SubmittedAnswerResponse.
+    Reuses extract_math_from_html so answers that are mostly math nodes (data-latex)
+    are not reduced to empty strings by naive tag stripping.
+    """
+    if not typed_answer or not str(typed_answer).strip():
+        return "", None
+    raw = str(typed_answer)
+    text_content, latex_content = extract_math_from_html(raw)
+    display = (text_content or "").strip()
+    if not display and latex_content:
+        display = latex_content.strip()
+    if not display:
+        display = raw.strip()
+    return display, latex_content
+
+
+def _merge_typed_answers_into_responses(
+    answers: List[schemas.SubmittedAnswerResponse],
+    typed_answers_json: Optional[str],
+    questions_by_id: dict,
+    graded_question_ids: set,
+) -> None:
+    """Append one SubmittedAnswerResponse per typed row; never drop rows with content."""
+    if not typed_answers_json or not typed_answers_json.strip():
+        return
+    import json as _json_merge
+
+    try:
+        typed_answers_data = _json_merge.loads(typed_answers_json)
+    except Exception:
+        return
+    if not isinstance(typed_answers_data, list):
+        return
+
+    graded_set = {str(x) for x in graded_question_ids}
+
+    for answer_data in typed_answers_data:
+        if not isinstance(answer_data, dict):
+            continue
+        question_id = answer_data.get("questionId")
+        question_number = answer_data.get("questionNumber")
+        typed_answer = answer_data.get("typedAnswer", "")
+        if typed_answer is None or not str(typed_answer).strip():
+            continue
+
+        qid_key = str(question_id) if question_id is not None else None
+        if qid_key and qid_key in graded_set:
+            continue
+
+        question = None
+        if question_id is not None:
+            question = questions_by_id.get(question_id) or questions_by_id.get(str(question_id))
+        if not question and question_number is not None:
+            try:
+                qn = int(question_number)
+            except (TypeError, ValueError):
+                qn = None
+            if qn is not None:
+                question = next((q for q in questions_by_id.values() if q.number == qn), None)
+
+        display, latex_vis = _typed_answer_for_api_display(str(typed_answer))
+
+        if question:
+            answers.append(
+                schemas.SubmittedAnswerResponse(
+                    questionId=str(question_id or question.id),
+                    questionNumber=int(question_number if question_number is not None else question.number),
+                    extractedText=display,
+                    extractedLatex=latex_vis,
+                    extractedSteps=[],
+                    gradingResult=None,
+                )
+            )
+        else:
+            # Question id/number no longer on exam — still return the payload so instructors see work
+            try:
+                qnum = int(question_number) if question_number is not None else 0
+            except (TypeError, ValueError):
+                qnum = 0
+            answers.append(
+                schemas.SubmittedAnswerResponse(
+                    questionId=str(question_id or "unknown"),
+                    questionNumber=qnum,
+                    extractedText=display,
+                    extractedLatex=latex_vis,
+                    extractedSteps=[],
+                    gradingResult=None,
+                )
+            )
+
+
+def _top_level_equals_indices(s: str) -> List[int]:
+    """
+    Indices of '=' that sit at LaTeX depth 0 (outside {...} and outside \\left/\\right groups).
+    Ignores '=' that are part of <=, >=, != when written with ASCII.
+    """
+    bi = 0
+    pi = 0
+    i = 0
+    n = len(s)
+    out: List[int] = []
+    while i < n:
+        if s.startswith("\\left", i):
+            pi += 1
+            i += 5
+            if i < n:
+                i += 1
+            continue
+        if s.startswith("\\right", i):
+            if pi > 0:
+                pi -= 1
+            i += 6
+            while i < n and s[i].isspace():
+                i += 1
+            if i < n and s[i] in ")}]|.":
+                i += 1
+            continue
+        c = s[i]
+        if c == "\\":
+            i += 1
+            if i < n and s[i].isalpha():
+                while i < n and s[i].isalpha():
+                    i += 1
+            elif i < n:
+                i += 1
+            continue
+        if c == "{":
+            bi += 1
+        elif c == "}" and bi > 0:
+            bi -= 1
+        elif c == "=" and bi == 0 and pi == 0:
+            if i > 0 and s[i - 1] in "<>!":
+                i += 1
+                continue
+            out.append(i)
+        i += 1
+    return out
+
+
+def _latex_chain_equations(s: str) -> List[str]:
+    """
+    If s has k top-level '=' signs, treat it as a chain P0=P1=...=Pk and emit
+    k equations P0=P1, P1=P2, ... (standard for glued work like A=B=C).
+    """
+    idx = _top_level_equals_indices(s)
+    if len(idx) < 2:
+        return [s.strip()] if s.strip() else []
+    parts: List[str] = []
+    prev = 0
+    for pos in idx:
+        parts.append(s[prev:pos])
+        prev = pos + 1
+    parts.append(s[prev:])
+    out: List[str] = []
+    for i in range(len(idx)):
+        lhs = parts[i].strip()
+        rhs = parts[i + 1].strip()
+        joined = f"{lhs}={rhs}".strip()
+        if joined and "=" in joined:
+            out.append(joined)
+    return out if out else [s.strip()]
+
+
+def _split_glued_digit_then_latex(s: str) -> List[str]:
+    """
+    Split '...=1 \\frac{...}' (digit directly touching a following LaTeX command) into
+    separate segments so each equation can be graded.
+    """
+    s = s.strip()
+    if not s:
+        return []
+    out: List[str] = []
+    remaining = s
+    while remaining:
+        m = re.match(r"^(.+?)=(\d+)\s+(\\[a-zA-Z].*)$", remaining, re.DOTALL)
+        if m:
+            out.append(f"{m.group(1)}={m.group(2)}".strip())
+            remaining = m.group(3).strip()
+            continue
+        m2 = re.match(r"^(.+?)=(\d+)(\\[a-zA-Z].*)$", remaining, re.DOTALL)
+        if m2:
+            out.append(f"{m2.group(1)}={m2.group(2)}".strip())
+            remaining = m2.group(3).strip()
+            continue
+        out.append(remaining)
+        break
+    return out
+
+
+def _finalize_latex_step_segments(blob: str) -> List[str]:
+    """Apply glued-number splits, then chain-split any segment with 2+ top-level '='."""
+    blob = blob.strip()
+    if not blob:
+        return []
+    final: List[str] = []
+    for piece in _split_glued_digit_then_latex(blob):
+        if not piece:
+            continue
+        if len(_top_level_equals_indices(piece)) >= 2:
+            final.extend(_latex_chain_equations(piece))
+        else:
+            final.append(piece)
+    return [x for x in final if x.strip()]
+
+
 def parse_answer_into_steps(answer_text: str) -> List[str]:
     """
     Parse a student's answer into individual steps.
@@ -1866,11 +2142,13 @@ def parse_answer_into_steps(answer_text: str) -> List[str]:
         return []
 
     text = answer_text.strip()
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
 
     # ---- 1) Single line: try to split into steps ----
     if len(lines) <= 1:
         single_line = text
+        # Glue fix: "=1\\frac" → "=1 \\frac" so boundaries are visible.
+        single_line = re.sub(r"=(\d+)(\\[a-zA-Z])", r"=\1 \2", single_line)
 
         # 1a) Numbered steps in one line: "1. foo 2. bar" or "(1) foo (2) bar"
         numbered_dot = re.split(r'\s+(?=\d+\.\s+)', single_line)
@@ -1884,8 +2162,30 @@ def parse_answer_into_steps(answer_text: str) -> List[str]:
             if out:
                 return out
 
-        # 1b) Split by = (equation steps)
-        if '=' in single_line:
+        # 1b) LaTeX / algebra one line: split before "\\frac", "\\lim", etc. When the
+        # line has backslashes, ONLY split at "\\command" boundaries — otherwise a
+        # pattern like (?=[a-zA-Z]) fires on the space inside "\\sin x".
+        if "=" in single_line:
+            if "\\" in single_line:
+                split_re = r"\s+(?=\\[a-zA-Z])"
+            else:
+                split_re = r"\s+(?=(?:[a-zA-Z(]|\d+[a-zA-Z]))"
+            chunks = re.split(split_re, single_line)
+            eq_chunks = [c.strip() for c in chunks if c.strip() and "=" in c]
+            if len(eq_chunks) >= 2:
+                expanded: List[str] = []
+                for ch in eq_chunks:
+                    expanded.extend(_finalize_latex_step_segments(ch))
+                if len(expanded) >= 2:
+                    return expanded
+            # No whitespace boundaries (e.g. one long LaTeX string): still try glue + chain.
+            merged = _finalize_latex_step_segments(single_line)
+            if len(merged) >= 2:
+                return merged
+
+        # 1b2) Single equation or rare patterns — split by = only when it produces
+        # sensible fragments (legacy path; avoid for multi-eq lines handled above).
+        if '=' in single_line and single_line.count('=') == 1:
             parts = re.split(r'(?<![<>=!])=(?!=)', single_line)
             if len(parts) > 1:
                 steps = []
@@ -1961,15 +2261,465 @@ def parse_answer_into_steps(answer_text: str) -> List[str]:
     return steps
 
 
+def _ordered_top_level_questions(questions: List[models.Question]) -> List[models.Question]:
+    """Parents only, in exam order (by question number)."""
+    return sorted(
+        (q for q in questions if q.parent_question_id is None),
+        key=lambda q: q.number,
+    )
+
+
+def _sorted_subquestions(parent: models.Question) -> List[models.Question]:
+    subs = list(parent.sub_questions or [])
+    return sorted(subs, key=lambda q: q.number)
+
+
+def _split_multipart_page_text(page_text: str, sub_count: int) -> List[str]:
+    """Split one page into (a), (b), … sections when possible."""
+    if sub_count <= 1:
+        t = (page_text or "").strip()
+        return [t] if t else []
+    text = (page_text or "").strip()
+    if not text:
+        return [""] * sub_count
+    pattern = re.compile(r"(?mi)^\s*\(([a-z])\)\s*")
+    matches = list(pattern.finditer(text))
+    if len(matches) >= sub_count:
+        parts: List[str] = []
+        for i in range(sub_count):
+            start = matches[i].start()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            parts.append(text[start:end].strip())
+        return parts
+    alt = re.compile(r"(?mi)^\s*([a-z])\)\s+")
+    matches2 = list(alt.finditer(text))
+    if len(matches2) >= sub_count:
+        parts = []
+        for i in range(sub_count):
+            start = matches2[i].start()
+            end = matches2[i + 1].start() if i + 1 < len(matches2) else len(text)
+            parts.append(text[start:end].strip())
+        return parts
+    paras = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    if len(paras) >= sub_count:
+        return paras[:sub_count]
+    return [text] + [""] * (sub_count - 1)
+
+
+def _split_monolithic_solution_text(
+    text: str, top_level: List[models.Question]
+) -> Optional[List[str]]:
+    """
+    When one PDF page contains every question, split on headings like
+    '1.', '2.', 'Question 3', etc. Returns one chunk per top-level question or None if unreliable.
+    """
+    ordered = sorted(top_level, key=lambda q: q.number)
+    if len(ordered) <= 1:
+        return [(text or "").strip()]
+    want = {q.number for q in ordered}
+    hits: List[Tuple[int, int]] = []
+    for m in re.finditer(
+        r"(?mi)^\s*(?:question|q\.?)\s*(\d+)\s*[\.\):]\s+",
+        text,
+    ):
+        num = int(m.group(1))
+        if num in want:
+            hits.append((m.start(), num))
+    if len(hits) < 2:
+        for m in re.finditer(r"(?mi)^\s*Q\s*(\d+)\s*[\.\):]?\s+", text):
+            num = int(m.group(1))
+            if num in want:
+                hits.append((m.start(), num))
+    if len(hits) < 2:
+        for m in re.finditer(r"(?mi)^\s*(\d+)\s*[\.\)]\s+\S", text):
+            num = int(m.group(1))
+            if num in want:
+                hits.append((m.start(), num))
+    hits.sort(key=lambda x: x[0])
+    dedup: List[Tuple[int, int]] = []
+    seen_pos: set = set()
+    for pos, num in hits:
+        if pos in seen_pos:
+            continue
+        seen_pos.add(pos)
+        dedup.append((pos, num))
+    hits = dedup
+    if len(hits) < 2:
+        return None
+    by_num: dict = {}
+    for i, (pos, num) in enumerate(hits):
+        end = hits[i + 1][0] if i + 1 < len(hits) else len(text)
+        by_num[num] = text[pos:end].strip()
+    out: List[str] = []
+    for q in ordered:
+        out.append(by_num.get(q.number, "").strip())
+    if sum(1 for c in out if c) < 2:
+        return None
+    return out
+
+
+def _append_typed_for_question(
+    extra: List[dict],
+    question: models.Question,
+    body: str,
+) -> None:
+    body = (body or "").strip()
+    if not body:
+        return
+    extra.append(
+        {
+            "questionId": question.id,
+            "questionNumber": question.number,
+            "typedAnswer": body,
+        }
+    )
+
+
+def _process_answer_page_for_top_level_question(
+    page_text: str,
+    top_q: models.Question,
+    pdf_bytes: bytes,
+    page_idx: int,
+    ocr: OCRProcessor,
+    extra_typed_answers: List[dict],
+    extra_image_records: List[dict],
+) -> None:
+    """
+    Route one PDF page (or OCR'd text) to the correct leaf questions (sub-parts or parent).
+    """
+    subs = _sorted_subquestions(top_q)
+    if ocr._text_is_clean(page_text):
+        if subs:
+            chunks = _split_multipart_page_text(page_text, len(subs))
+            for sub_q, chunk in zip(subs, chunks):
+                _append_typed_for_question(extra_typed_answers, sub_q, chunk)
+        else:
+            _append_typed_for_question(extra_typed_answers, top_q, page_text)
+        return
+    try:
+        import io as _io
+        from pdf2image import convert_from_bytes as _c2b
+        from pypdf import PdfReader as _PR, PdfWriter as _PW
+
+        reader = _PR(_io.BytesIO(pdf_bytes))
+        if page_idx >= len(reader.pages):
+            return
+        writer = _PW()
+        writer.add_page(reader.pages[page_idx])
+        page_buf = _io.BytesIO()
+        writer.write(page_buf)
+        page_buf.seek(0)
+        imgs = _c2b(page_buf.read(), dpi=200)
+        if not imgs:
+            return
+        img_buf = _io.BytesIO()
+        imgs[0].save(img_buf, format="PNG")
+        png_bytes = img_buf.getvalue()
+        ocr_result = ocr.extract_steps_from_file(png_bytes, f"page{page_idx}.png")
+        combined = (ocr_result.combined_text or "").strip() or "\n".join(
+            s for s in ocr_result.steps if s.strip()
+        )
+        if subs and combined and len(combined) > 30:
+            chunks = _split_multipart_page_text(combined, len(subs))
+            for sub_q, chunk in zip(subs, chunks):
+                _append_typed_for_question(extra_typed_answers, sub_q, chunk)
+            return
+        target = subs[0] if subs else top_q
+        safe_name = f"q_{target.id}_pdf{page_idx}.png"
+        extra_image_records.append({"filename": safe_name, "data": png_bytes})
+    except Exception as ex:
+        logger.warning("Could not render/scanned PDF page %s: %s", page_idx, ex)
+
+
+def _ingest_full_answer_pdf(
+    pdf_bytes: bytes,
+    exam: models.Exam,
+    ocr: OCRProcessor,
+) -> Tuple[List[dict], List[dict]]:
+    """Map PDF pages → top-level exam questions; split multi-part pages onto sub-questions."""
+    extra_typed: List[dict] = []
+    extra_img: List[dict] = []
+    pdf_pages = ocr.extract_pdf_text_pages(pdf_bytes)
+    tls = _ordered_top_level_questions(list(exam.questions))
+    if not tls:
+        return extra_typed, extra_img
+
+    if len(pdf_pages) == 1 and len(tls) > 1:
+        sole = pdf_pages[0]
+        chunks = _split_monolithic_solution_text(sole, tls)
+        if chunks and len(chunks) == len(tls):
+            for top_q, chunk in zip(tls, chunks):
+                if not (chunk or "").strip():
+                    continue
+                _process_answer_page_for_top_level_question(
+                    chunk, top_q, pdf_bytes, 0, ocr, extra_typed, extra_img
+                )
+            return extra_typed, extra_img
+
+    for page_idx, top_q in enumerate(tls):
+        if page_idx >= len(pdf_pages):
+            break
+        page_text = pdf_pages[page_idx]
+        _process_answer_page_for_top_level_question(
+            page_text, top_q, pdf_bytes, page_idx, ocr, extra_typed, extra_img
+        )
+    return extra_typed, extra_img
+
+
+def _preview_sub_parts_for_page(
+    subs: List[models.Question],
+    page_text: str,
+    ocr: OCRProcessor,
+) -> List[dict]:
+    """Describe how one page maps to sub-parts (or single leaf) for UI preview."""
+    raw = page_text or ""
+    if not subs:
+        clean = ocr._text_is_clean(raw)
+        st = raw.strip()
+        return [
+            {
+                "part": None,
+                "chars": len(st),
+                "hasContent": bool(st),
+                "delivery": "typed_text" if clean else "ocr_image",
+            }
+        ]
+    if not ocr._text_is_clean(raw):
+        return [
+            {
+                "part": chr(97 + i),
+                "chars": None,
+                "hasContent": None,
+                "delivery": "ocr_image",
+            }
+            for i in range(len(subs))
+        ]
+    chunks = _split_multipart_page_text(raw, len(subs))
+    out: List[dict] = []
+    for i, _sq in enumerate(subs):
+        ch = (chunks[i] if i < len(chunks) else "") or ""
+        st = ch.strip()
+        out.append(
+            {
+                "part": chr(97 + i),
+                "chars": len(st),
+                "hasContent": bool(st),
+                "delivery": "typed_text",
+            }
+        )
+    return out
+
+
+def build_answer_pdf_preview(pdf_bytes: bytes, exam: models.Exam, ocr: OCRProcessor) -> dict:
+    """
+    Dry-run routing for the full-answer PDF (no DB writes). Used by the take-exam UI.
+    """
+    pdf_pages = ocr.extract_pdf_text_pages(pdf_bytes)
+    tls = _ordered_top_level_questions(list(exam.questions))
+    n_pages = len(pdf_pages)
+    n_tl = len(tls)
+    warnings: List[str] = []
+    rows: List[dict] = []
+
+    if n_tl == 0:
+        return {
+            "strategy": "none",
+            "pdfPageCount": n_pages,
+            "topLevelCount": 0,
+            "rows": [],
+            "warnings": ["This exam has no questions."],
+            "monolithicDetected": False,
+            "summary": "No questions to map.",
+        }
+
+    if n_pages == 0:
+        warnings.append("Could not read any pages from this PDF (corrupt or empty).")
+        return {
+            "strategy": "empty_pdf",
+            "pdfPageCount": 0,
+            "topLevelCount": n_tl,
+            "rows": [],
+            "warnings": warnings,
+            "monolithicDetected": False,
+            "summary": "No pages detected.",
+        }
+
+    if n_pages == 1 and n_tl > 1:
+        sole = pdf_pages[0]
+        chunks = (
+            _split_monolithic_solution_text(sole, tls) if ocr._text_is_clean(sole) else None
+        )
+        if chunks and len(chunks) == n_tl:
+            for top_q, chunk in zip(tls, chunks):
+                subs = _sorted_subquestions(top_q)
+                rows.append(
+                    {
+                        "questionNumber": top_q.number,
+                        "questionLabel": f"Q{top_q.number}",
+                        "source": "single_page_numbered_sections",
+                        "subParts": _preview_sub_parts_for_page(subs, chunk, ocr),
+                    }
+                )
+            return {
+                "strategy": "monolithic",
+                "pdfPageCount": n_pages,
+                "topLevelCount": n_tl,
+                "rows": rows,
+                "warnings": warnings,
+                "monolithicDetected": True,
+                "summary": f"One PDF page split into {n_tl} main questions via headings (1., Question 2, Q3, …).",
+            }
+
+    for page_idx, top_q in enumerate(tls):
+        if page_idx >= n_pages:
+            rows.append(
+                {
+                    "questionNumber": top_q.number,
+                    "questionLabel": f"Q{top_q.number}",
+                    "source": "missing_page",
+                    "subParts": [],
+                    "note": f"No page {page_idx + 1} in PDF — nothing routed here.",
+                }
+            )
+            continue
+        page_text = pdf_pages[page_idx]
+        subs = _sorted_subquestions(top_q)
+        rows.append(
+            {
+                "questionNumber": top_q.number,
+                "questionLabel": f"Q{top_q.number}",
+                "source": f"pdf_page_{page_idx + 1}",
+                "subParts": _preview_sub_parts_for_page(subs, page_text, ocr),
+            }
+        )
+
+    if n_pages > n_tl:
+        warnings.append(
+            f"{n_pages - n_tl} extra PDF page(s) after page {n_tl} will be ignored."
+        )
+    if n_pages == 1 and n_tl > 1:
+        warnings.append(
+            "Single page without clear numbered section headings: only Q1 receives text unless you add headings like “1.” or “Question 2” on new lines, or use one page per question."
+        )
+
+    if n_tl == 1:
+        summary = f"{n_pages} PDF page(s) → the only main question (Q{tls[0].number})."
+    elif n_pages > 1:
+        summary = (
+            f"{n_pages} PDF page(s) → {n_tl} main questions, in order (page 1 = Q{tls[0].number}, …)."
+        )
+    else:
+        summary = (
+            f"1 PDF page → only Q{tls[0].number} received text; use headings or one page per question to cover all {n_tl} questions."
+        )
+
+    return {
+        "strategy": "per_page",
+        "pdfPageCount": n_pages,
+        "topLevelCount": n_tl,
+        "rows": rows,
+        "warnings": warnings,
+        "monolithicDetected": False,
+        "summary": summary,
+    }
+
+
+def _ingest_multi_page_pdf_attached_to_question(
+    pdf_bytes: bytes,
+    filename: str,
+    exam: models.Exam,
+    ocr: OCRProcessor,
+) -> Optional[Tuple[List[dict], List[dict]]]:
+    """
+    Student attached a multi-page PDF under one question slot (filename q_<id>_0.pdf).
+    If it looks like a full paper, fan out pages across top-level questions starting at the hinted index.
+    """
+    stem = Path(filename).stem
+    if not stem.startswith("q_"):
+        return None
+    parts = stem.split("_", 2)
+    if len(parts) < 2:
+        return None
+    hint_qid = parts[1]
+    tls = _ordered_top_level_questions(list(exam.questions))
+    if not tls:
+        return None
+    try:
+        import io as _io
+        from pypdf import PdfReader as _PR
+
+        n_pages = len(_PR(_io.BytesIO(pdf_bytes)).pages)
+    except Exception:
+        n_pages = len(ocr.extract_pdf_text_pages(pdf_bytes)) or 1
+    if n_pages <= 1:
+        return None
+    start = next((i for i, t in enumerate(tls) if t.id == hint_qid), 0)
+    if n_pages == len(tls):
+        start = 0
+    elif start + n_pages > len(tls):
+        return None
+    extra_typed: List[dict] = []
+    extra_img: List[dict] = []
+    pdf_pages = ocr.extract_pdf_text_pages(pdf_bytes)
+    for j in range(n_pages):
+        qi = start + j
+        if qi >= len(tls):
+            break
+        page_text = pdf_pages[j] if j < len(pdf_pages) else ""
+        _process_answer_page_for_top_level_question(
+            page_text, tls[qi], pdf_bytes, j, ocr, extra_typed, extra_img
+        )
+    return (extra_typed, extra_img)
+
+
+def _ingest_single_page_pdf_as_full_exam_if_detected(
+    pdf_bytes: bytes,
+    filename: str,
+    exam: models.Exam,
+    ocr: OCRProcessor,
+) -> Optional[Tuple[List[dict], List[dict]]]:
+    """
+    One-page PDF uploaded under a question slot but containing numbered sections
+    for every top-level question (e.g. '1.', '2.', …).
+    """
+    stem = Path(filename).stem
+    if not stem.startswith("q_"):
+        return None
+    tls = _ordered_top_level_questions(list(exam.questions))
+    if len(tls) <= 1:
+        return None
+    pages = ocr.extract_pdf_text_pages(pdf_bytes)
+    if len(pages) != 1:
+        return None
+    sole = pages[0]
+    if not ocr._text_is_clean(sole):
+        return None
+    chunks = _split_monolithic_solution_text(sole, tls)
+    if not chunks or len(chunks) != len(tls):
+        return None
+    extra_typed: List[dict] = []
+    extra_img: List[dict] = []
+    for top_q, chunk in zip(tls, chunks):
+        if not (chunk or "").strip():
+            continue
+        _process_answer_page_for_top_level_question(
+            chunk, top_q, pdf_bytes, 0, ocr, extra_typed, extra_img
+        )
+    return (extra_typed, extra_img)
+
+
 async def grade_submission_automatically(submission_id: str, db: Session):
     """Automatically grade a submission after it's submitted"""
     import json
     import re
     from html import unescape
     
-    submission = db.query(models.Submission).filter(
-        models.Submission.id == submission_id
-    ).first()
+    submission = (
+        db.query(models.Submission)
+        .options(selectinload(models.Submission.images))
+        .filter(models.Submission.id == submission_id)
+        .first()
+    )
     if not submission:
         return
     
@@ -1978,6 +2728,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
     
     exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
     questions = exam.questions
+    top_level_ordered = _ordered_top_level_questions(list(questions))
     
     total_score = 0.0
     
@@ -2090,7 +2841,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                         student_text=student_step,
                         is_correct=evaluation.status.value == "Correct",
                         score=evaluation.points_earned,
-                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
+                        max_score=_step_result_max_score(evaluation, gold_steps, idx),
                         feedback=evaluation.feedback,
                         expected=matched_gold,
                         received=student_step
@@ -2124,13 +2875,13 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                             (q for q in questions if q.id == candidate_qid), None
                         )
 
-                # Fallback: match by 1-based page number
+                # Fallback: match by 1-based page number → top-level questions only
                 if question is None:
                     pg = image_record.page_number
-                    if 1 <= pg <= len(questions):
-                        question = questions[pg - 1]
+                    if 1 <= pg <= len(top_level_ordered):
+                        question = top_level_ordered[pg - 1]
                     else:
-                        question = questions[0] if questions else None
+                        question = top_level_ordered[0] if top_level_ordered else None
 
                 if not question:
                     continue
@@ -2211,10 +2962,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                         student_text=student_step,
                         is_correct=evaluation.status.value == "Correct",
                         score=evaluation.points_earned,
-                        max_score=(
-                            gold_steps[evaluation.matched_gold_step].points
-                            if evaluation.matched_gold_step is not None else 0
-                        ),
+                        max_score=_step_result_max_score(evaluation, gold_steps, idx),
                         feedback=evaluation.feedback,
                         expected=matched_gold,
                         received=student_step
@@ -2227,10 +2975,21 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                 print(f"Error grading image {image_record.image_path}: {e}")
                 import traceback
                 traceback.print_exc()
-    
-    submission.total_score = total_score
-    submission.graded_at = datetime.utcnow()
-    submission.status = models.SubmissionStatus.AWAITING_APPROVAL
+
+    db.flush()
+    graded_rows = (
+        db.query(models.GradingResult)
+        .filter(models.GradingResult.submission_id == submission.id)
+        .count()
+    )
+    if graded_rows == 0:
+        submission.status = models.SubmissionStatus.PENDING
+        submission.total_score = None
+        submission.graded_at = None
+    else:
+        submission.total_score = total_score
+        submission.graded_at = datetime.utcnow()
+        submission.status = models.SubmissionStatus.AWAITING_APPROVAL
     db.commit()
 
 
@@ -2255,57 +3014,52 @@ async def submit_exam(
         )
 
     # ── Process full-exam answer PDF ─────────────────────────────────────────
-    # If the student uploaded a single PDF covering all questions, extract text
-    # from each page and turn it into typed answers (page N → question N).
-    # For scanned/handwritten pages we save them as per-question image files.
+    # Pages map to top-level questions only (Q1, Q2, …). Multi-part questions
+    # get (a)(b) splits onto sub-question rows. Single-page “wall of solutions”
+    # PDFs are split on headings like "1.", "Question 2", etc. when detected.
     extra_typed_answers: list = []      # [{questionId, questionNumber, typedAnswer}]
     extra_image_records: list = []      # [{filename, bytes}]  for scanned pages
 
     if answer_pdf and answer_pdf.filename:
         try:
             pdf_bytes = await answer_pdf.read()
-            pdf_pages = ocr_processor.extract_pdf_text_pages(pdf_bytes)
-            questions_ordered = sorted(exam.questions, key=lambda q: q.number)
-
-            for page_idx, question in enumerate(questions_ordered):
-                page_text = pdf_pages[page_idx] if page_idx < len(pdf_pages) else ''
-
-                if ocr_processor._text_is_clean(page_text):
-                    # Typed page → store as a typed answer (perfect accuracy)
-                    extra_typed_answers.append({
-                        'questionId': question.id,
-                        'questionNumber': question.number,
-                        'typedAnswer': page_text,
-                    })
-                else:
-                    # Scanned/handwritten page → save as an image file for OCR
-                    # Render this page as a PNG via pdf2image
-                    try:
-                        from pdf2image import convert_from_bytes as _c2b
-                        import io as _io
-                        # Re-read just this page (slice trick via pypdf)
-                        from pypdf import PdfReader as _PR, PdfWriter as _PW
-                        reader = _PR(_io.BytesIO(pdf_bytes))
-                        if page_idx < len(reader.pages):
-                            writer = _PW()
-                            writer.add_page(reader.pages[page_idx])
-                            page_buf = _io.BytesIO()
-                            writer.write(page_buf)
-                            page_buf.seek(0)
-                            imgs = _c2b(page_buf.read(), dpi=200)
-                            if imgs:
-                                img_buf = _io.BytesIO()
-                                imgs[0].save(img_buf, format='PNG')
-                                safe_name = f"q_{question.id}_pdf{page_idx}.png"
-                                extra_image_records.append({
-                                    'filename': safe_name,
-                                    'data': img_buf.getvalue(),
-                                })
-                    except Exception as _pe:
-                        logger.warning(f"Could not render PDF page {page_idx}: {_pe}")
-
+            t_extra, img_extra = _ingest_full_answer_pdf(
+                pdf_bytes, exam, ocr_processor
+            )
+            extra_typed_answers.extend(t_extra)
+            extra_image_records.extend(img_extra)
         except Exception as e:
-            logger.warning(f"Failed to process answer PDF: {e}")
+            logger.exception("Failed to process answer PDF: %s", e)
+
+    # ── Fan out mistaken multi-page (or monolithic single-page) PDFs on one slot ─
+    skip_upload_indices: set = set()
+    image_payloads: List[Tuple[int, bytes, str]] = []
+    for i, uf in enumerate(images):
+        try:
+            raw = await uf.read()
+        except Exception as ex:
+            logger.warning("Could not read upload %s: %s", uf.filename, ex)
+            continue
+        image_payloads.append((i, raw, uf.filename or f"upload_{i}"))
+
+    for i, raw, fname in image_payloads:
+        if not (fname or "").lower().endswith(".pdf"):
+            continue
+        try:
+            expanded = _ingest_multi_page_pdf_attached_to_question(
+                raw, fname, exam, ocr_processor
+            )
+            if not expanded:
+                expanded = _ingest_single_page_pdf_as_full_exam_if_detected(
+                    raw, fname, exam, ocr_processor
+                )
+            if expanded:
+                t2, img2 = expanded
+                extra_typed_answers.extend(t2)
+                extra_image_records.extend(img2)
+                skip_upload_indices.add(i)
+        except Exception as ex:
+            logger.warning("PDF expansion skipped for %s: %s", fname, ex)
 
     # ── Merge typed answers ───────────────────────────────────────────────────
     merged_answers = extra_typed_answers[:]
@@ -2342,47 +3096,46 @@ async def submit_exam(
 
     submission_dir = UPLOAD_DIR / new_submission.id
 
-    # ── Save per-question image uploads ──────────────────────────────────────
-    if images or extra_image_records:
+    # ── Save per-question image uploads (bytes pre-read; PDFs may be skipped) ─
+    if image_payloads or extra_image_records:
         submission_dir.mkdir(exist_ok=True)
 
-        for idx, image_file in enumerate(images, start=1):
-            original_name = image_file.filename or f"page_{idx}.jpg"
-            safe_name = Path(original_name).name or f"page_{idx}.jpg"
+        page_seq = 0
+        for i, raw, original_name in image_payloads:
+            if i in skip_upload_indices:
+                continue
+            page_seq += 1
+            safe_name = Path(original_name).name or f"page_{page_seq}.jpg"
             image_path = submission_dir / safe_name
-
-            with open(image_path, "wb") as buffer:
-                shutil.copyfileobj(image_file.file, buffer)
+            image_path.write_bytes(raw)
 
             submission_image = models.SubmissionImage(
                 submission_id=new_submission.id,
                 image_path=str(image_path),
-                page_number=idx
+                page_number=page_seq,
             )
             db.add(submission_image)
 
-        # Save any scanned pages extracted from the answer PDF
-        for rec in extra_image_records:
-            submission_dir.mkdir(exist_ok=True)
-            image_path = submission_dir / rec['filename']
+        base_count = page_seq
+        for rec_idx, rec in enumerate(extra_image_records):
+            image_path = submission_dir / rec["filename"]
             with open(image_path, "wb") as f:
-                f.write(rec['data'])
+                f.write(rec["data"])
             submission_image = models.SubmissionImage(
                 submission_id=new_submission.id,
                 image_path=str(image_path),
-                page_number=len(images) + extra_image_records.index(rec) + 1
+                page_number=base_count + rec_idx + 1,
             )
             db.add(submission_image)
     
     db.commit()
     db.refresh(new_submission)
     
-    # Automatically trigger AI grading
+    # Automatically trigger AI grading (same path as manual "Auto-grade")
     try:
         await grade_submission_automatically(new_submission.id, db)
-    except Exception as e:
-        print(f"Auto-grading failed: {e}")
-        # Don't fail the submission if auto-grading fails
+    except Exception:
+        logger.exception("Auto-grading failed after submit for submission %s", new_submission.id)
     
     return {
         "id": new_submission.id,
@@ -2424,6 +3177,8 @@ def get_submissions(
     result = []
     import json
     
+    show_grading = _include_grading_in_submission_payload
+
     for submission in submissions:
         # Get student info
         student = db.query(models.User).filter(models.User.id == submission.student_id).first()
@@ -2431,6 +3186,7 @@ def get_submissions(
         # Get exam to access questions
         exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
         questions_by_id = {q.id: q for q in exam.questions} if exam else {}
+        _show_grading = show_grading(submission, current_user)
         
         # Build answers
         answers = []
@@ -2469,48 +3225,14 @@ def get_submissions(
                         feedback=grading_result.feedback or "",
                         stepResults=step_results,
                         isCorrect=grading_result.is_correct
-                    ) if submission.status in [models.SubmissionStatus.GRADED, models.SubmissionStatus.APPROVED, models.SubmissionStatus.AWAITING_APPROVAL] else None
+                    ) if _show_grading else None
                 )
             )
         
-        # Also include typed answers from submission (for pending/grading submissions)
-        if submission.typed_answers:
-            try:
-                typed_answers_data = json.loads(submission.typed_answers)
-                for answer_data in typed_answers_data:
-                    question_id = answer_data.get('questionId')
-                    question_number = answer_data.get('questionNumber')
-                    typed_answer = answer_data.get('typedAnswer', '')
-                    
-                    # Skip if already added from grading results
-                    if question_id in graded_question_ids:
-                        continue
-                    
-                    question = questions_by_id.get(question_id)
-                    if not question and question_number:
-                        # Try to find by number
-                        question = next((q for q in questions_by_id.values() if q.number == question_number), None)
-                    
-                    if question:
-                        # Extract text from HTML
-                        from html import unescape
-                        import re
-                        text_content = re.sub(r'<[^>]+>', '', typed_answer)
-                        text_content = unescape(text_content).strip()
-                        
-                        answers.append(
-                            schemas.SubmittedAnswerResponse(
-                                questionId=question_id or question.id,
-                                questionNumber=question_number or question.number,
-                                extractedText=text_content,
-                                extractedLatex=None,
-                                extractedSteps=[],
-                                gradingResult=None
-                            )
-                        )
-            except:
-                pass
-        
+        _merge_typed_answers_into_responses(
+            answers, submission.typed_answers, questions_by_id, graded_question_ids
+        )
+
         result.append(
             schemas.SubmissionResponse(
                 id=submission.id,
@@ -2556,6 +3278,7 @@ def get_submission(
     # Get exam to access questions
     exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
     questions_by_id = {q.id: q for q in exam.questions} if exam else {}
+    _show_grading = _include_grading_in_submission_payload(submission, current_user)
     
     # First, add answers from grading results (if any)
     graded_question_ids = set()
@@ -2591,48 +3314,14 @@ def get_submission(
                     feedback=grading_result.feedback or "",
                     stepResults=step_results,
                     isCorrect=grading_result.is_correct
-                ) if submission.status in [models.SubmissionStatus.GRADED, models.SubmissionStatus.APPROVED, models.SubmissionStatus.AWAITING_APPROVAL] else None
+                ) if _show_grading else None
             )
         )
     
-    # Also include typed answers from submission (for pending/grading submissions)
-    if submission.typed_answers:
-        try:
-            typed_answers_data = json.loads(submission.typed_answers)
-            for answer_data in typed_answers_data:
-                question_id = answer_data.get('questionId')
-                question_number = answer_data.get('questionNumber')
-                typed_answer = answer_data.get('typedAnswer', '')
-                
-                # Skip if already added from grading results
-                if question_id in graded_question_ids:
-                    continue
-                
-                question = questions_by_id.get(question_id)
-                if not question and question_number:
-                    # Try to find by number
-                    question = next((q for q in questions_by_id.values() if q.number == question_number), None)
-                
-                if question:
-                    # Extract text from HTML
-                    from html import unescape
-                    import re
-                    text_content = re.sub(r'<[^>]+>', '', typed_answer)
-                    text_content = unescape(text_content).strip()
-                    
-                    answers.append(
-                        schemas.SubmittedAnswerResponse(
-                            questionId=question_id or question.id,
-                            questionNumber=question_number or question.number,
-                            extractedText=text_content,
-                            extractedLatex=None,
-                            extractedSteps=[],
-                            gradingResult=None
-                        )
-                    )
-        except:
-            pass
-    
+    _merge_typed_answers_into_responses(
+        answers, submission.typed_answers, questions_by_id, graded_question_ids
+    )
+
     return schemas.SubmissionResponse(
         id=submission.id,
         examId=submission.exam_id,
@@ -2643,6 +3332,224 @@ def get_submission(
         answers=answers,
         totalScore=submission.total_score,
         maxScore=submission.max_score
+    )
+
+
+@app.get("/api/submissions/{submission_id}/marked-pdf")
+async def download_marked_submission_pdf(
+    submission_id: str,
+    paper: str = "letter",
+    include_reference_solutions: bool = False,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    PDF: exam questions, student responses, scores and step feedback.
+    Optional `include_reference_solutions=true` (professors/admins only) appends model answers.
+    `paper=a4|letter|legal`
+    """
+    from io import BytesIO
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from fastapi.responses import StreamingResponse
+
+    submission = (
+        db.query(models.Submission)
+        .options(
+            selectinload(models.Submission.grading_results).selectinload(
+                models.GradingResult.step_results
+            ),
+        )
+        .filter(models.Submission.id == submission_id)
+        .first()
+    )
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    exam = (
+        db.query(models.Exam)
+        .options(
+            selectinload(models.Exam.questions).selectinload(models.Question.attachments),
+            selectinload(models.Exam.questions).selectinload(models.Question.gold_steps),
+        )
+        .filter(models.Exam.id == submission.exam_id)
+        .first()
+    )
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    course = db.query(models.Course).filter(models.Course.id == exam.course_id).first()
+    student = db.query(models.User).filter(models.User.id == submission.student_id).first()
+
+    # Access control (same idea as get_submission + course ownership for professors)
+    if current_user.role == models.UserRole.STUDENT:
+        if submission.student_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    elif current_user.role == models.UserRole.PROFESSOR:
+        if not course or course.professor_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    # ADMIN: allowed
+
+    allow_ref = include_reference_solutions and current_user.role in (
+        models.UserRole.PROFESSOR,
+        models.UserRole.ADMIN,
+    )
+    if include_reference_solutions and not allow_ref:
+        include_reference_solutions = False
+
+    graded_status_values = {"graded", "awaiting_approval", "approved"}
+    st_val = (
+        submission.status.value
+        if isinstance(submission.status, models.SubmissionStatus)
+        else str(submission.status or "")
+    )
+    if current_user.role == models.UserRole.STUDENT and st_val not in graded_status_values:
+        raise HTTPException(
+            status_code=403,
+            detail="Marked PDF is available after grading is complete.",
+        )
+
+    by_qid = {gr.question_id: gr for gr in submission.grading_results}
+    typed_map = _typed_answers_by_question_id(submission)
+
+    buffer = BytesIO()
+    pagesize = _pdf_pagesize(paper)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=pagesize,
+        rightMargin=72,
+        leftMargin=72,
+        topMargin=72,
+        bottomMargin=18,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "MarkedTitle",
+        parent=styles["Heading1"],
+        fontSize=18,
+        textColor="black",
+        spaceAfter=24,
+        alignment=TA_CENTER,
+    )
+    heading_style = ParagraphStyle(
+        "MarkedHeading",
+        parent=styles["Heading2"],
+        fontSize=13,
+        textColor="black",
+        spaceAfter=10,
+    )
+    normal_style = styles["Normal"]
+    sub_style = ParagraphStyle("MarkedSub", parent=normal_style, fontSize=10, spaceAfter=4)
+    banner_style = ParagraphStyle(
+        "MarkedBanner",
+        parent=normal_style,
+        fontSize=10,
+        textColor="white",
+        backColor=(0.35, 0.22, 0.55),
+        borderPadding=6,
+        spaceAfter=12,
+        alignment=TA_CENTER,
+    )
+
+    story = []
+    story.append(Paragraph("MARKED SUBMISSION REPORT", banner_style))
+    story.append(Spacer(1, 0.08 * inch))
+    story.append(Paragraph(_pdf_safe_text(exam.title), title_style))
+    story.append(Spacer(1, 0.15 * inch))
+    if course:
+        story.append(Paragraph(f"<b>Course:</b> {_pdf_safe_text(course.name)}", normal_style))
+    story.append(
+        Paragraph(
+            f"<b>Student:</b> {_pdf_safe_text(student.name if student else 'Unknown')}",
+            normal_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"<b>Submitted:</b> {submission.submitted_at.strftime('%Y-%m-%d %H:%M')}",
+            normal_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"<b>Status:</b> {_pdf_safe_text(st_val)}",
+            normal_style,
+        )
+    )
+    if submission.total_score is not None:
+        story.append(
+            Paragraph(
+                f"<b>Total score:</b> {_pdf_safe_text(str(submission.total_score))} / "
+                f"{_pdf_safe_text(str(submission.max_score))} pts",
+                normal_style,
+            )
+        )
+    story.append(Spacer(1, 0.35 * inch))
+
+    sub_style_tree = ParagraphStyle("MarkedSubQ", parent=normal_style, leftIndent=18, spaceAfter=2)
+    sub_heading_tree = ParagraphStyle(
+        "MarkedSubQH", parent=heading_style, leftIndent=18, fontSize=11
+    )
+
+    alphabet = "abcdefghijklmnopqrstuvwxyz"
+    tree = _build_question_tree(exam.questions)
+    if not exam.questions:
+        story.append(Paragraph("No questions on this exam.", normal_style))
+    else:
+        for q_num, (top_q, subs) in enumerate(tree, 1):
+            gr = by_qid.get(top_q.id)
+            typed_fb = typed_map.get(top_q.id, "")
+            _append_marked_response_block(
+                top_q,
+                story,
+                f"Question {q_num}",
+                gr,
+                typed_fb,
+                normal_style,
+                heading_style,
+                sub_style,
+                inch,
+                UPLOAD_DIR,
+                allow_ref,
+            )
+            for s_num, sub_q in enumerate(subs):
+                letter = alphabet[s_num] if s_num < len(alphabet) else str(s_num + 1)
+                grs = by_qid.get(sub_q.id)
+                tf = typed_map.get(sub_q.id, "")
+                _append_marked_response_block(
+                    sub_q,
+                    story,
+                    f"Question {q_num} ({letter})",
+                    grs,
+                    tf,
+                    sub_style_tree,
+                    sub_heading_tree,
+                    sub_style_tree,
+                    inch,
+                    UPLOAD_DIR,
+                    allow_ref,
+                )
+
+    try:
+        doc.build(story)
+        buffer.seek(0)
+    except Exception as e:
+        logger.error(f"Marked submission PDF failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
+
+    safe_student = _pdf_safe_text(student.name if student else "student").replace(" ", "_")[:40]
+    safe_exam = _pdf_safe_text(exam.title).replace(" ", "_").replace("/", "_")[:60]
+    fname = f"marked_{safe_exam}_{safe_student}.pdf"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
     )
 
 
@@ -2672,6 +3579,7 @@ async def grade_submission(
     # Get exam and questions
     exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
     questions = exam.questions
+    top_level_ordered = _ordered_top_level_questions(list(questions))
     
     total_score = 0.0
     
@@ -2764,7 +3672,7 @@ async def grade_submission(
                         student_text=student_step,
                         is_correct=evaluation.status.value == "Correct",
                         score=evaluation.points_earned,
-                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
+                        max_score=_step_result_max_score(evaluation, gold_steps, idx),
                         feedback=evaluation.feedback,
                         expected=matched_gold,
                         received=student_step
@@ -2796,62 +3704,85 @@ async def grade_submission(
             )
             
             student_steps = ocr_result.steps
-            
-            # Grade each question (assuming one question per image for now); skip if already graded from typed answers
-            if image.page_number <= len(questions):
-                question = questions[image.page_number - 1]
-                if question.id in graded_question_ids:
-                    continue
-                
-                # Get gold solution steps
-                gold_steps = [
-                    GraderStep(
-                        content=(step.expression or step.latex or '').strip(),
-                        points=float(step.points),
-                        required=step.required
+            if not student_steps:
+                continue
+
+            stem = image_path.stem
+            question = None
+            if stem.startswith("q_"):
+                parts = stem.split("_", 2)
+                if len(parts) >= 2:
+                    candidate_qid = parts[1]
+                    question = next(
+                        (q for q in questions if q.id == candidate_qid), None
                     )
-                    for step in question.gold_steps
-                ]
-                
-                grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
-                grading_result = grader.grade(student_steps)
-                
-                # Store grading result
-                db_grading_result = models.GradingResult(
-                    submission_id=submission.id,
-                    question_id=question.id,
-                    extracted_text="\n".join(student_steps),
-                    extracted_latex=None,
-                    score=grading_result['total_score'],
-                    max_score=grading_result['max_score'],
-                    feedback=f"Scored {grading_result['percentage']:.1f}%",
-                    is_correct=grading_result['percentage'] >= 70
+            if question is None:
+                pg = image.page_number
+                if 1 <= pg <= len(top_level_ordered):
+                    question = top_level_ordered[pg - 1]
+                else:
+                    question = top_level_ordered[0] if top_level_ordered else None
+
+            if not question or question.id in graded_question_ids:
+                continue
+
+            # Get gold solution steps
+            gold_steps = [
+                GraderStep(
+                    content=(
+                        (step.latex if step.latex and step.latex.strip() else step.expression)
+                        or ""
+                    ).strip(),
+                    points=float(step.points),
+                    required=step.required,
                 )
-                db.add(db_grading_result)
-                db.flush()
-                
-                # Store step results
-                for idx, (student_step, evaluation) in enumerate(
-                    zip(student_steps, grading_result['evaluations']), start=1
-                ):
-                    matched_gold = None
-                    if evaluation.matched_gold_step is not None:
-                        matched_gold = gold_steps[evaluation.matched_gold_step].content
-                    
-                    step_result = models.StepResult(
-                        grading_result_id=db_grading_result.id,
-                        step_number=idx,
-                        student_text=student_step,
-                        is_correct=evaluation.status.value == "Correct",
-                        score=evaluation.points_earned,
-                        max_score=gold_steps[evaluation.matched_gold_step].points if evaluation.matched_gold_step is not None else 0,
-                        feedback=evaluation.feedback,
-                        expected=matched_gold,
-                        received=student_step
-                    )
-                    db.add(step_result)
-                
-                total_score += grading_result['total_score']
+                for step in question.gold_steps
+                if (step.latex and step.latex.strip()) or (step.expression and step.expression.strip())
+            ]
+
+            if not gold_steps:
+                continue
+
+            grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
+            grading_result = grader.grade(student_steps)
+
+            # Store grading result
+            db_grading_result = models.GradingResult(
+                submission_id=submission.id,
+                question_id=question.id,
+                extracted_text="\n".join(student_steps),
+                extracted_latex=None,
+                score=grading_result['total_score'],
+                max_score=grading_result['max_score'],
+                feedback=f"Scored {grading_result['percentage']:.1f}%",
+                is_correct=grading_result['percentage'] >= 70
+            )
+            db.add(db_grading_result)
+            db.flush()
+
+            # Store step results
+            for idx, (student_step, evaluation) in enumerate(
+                zip(student_steps, grading_result['evaluations']), start=1
+            ):
+                matched_gold = None
+                if evaluation.matched_gold_step is not None:
+                    matched_gold = gold_steps[evaluation.matched_gold_step].content
+
+                step_result = models.StepResult(
+                    grading_result_id=db_grading_result.id,
+                    step_number=idx,
+                    student_text=student_step,
+                    is_correct=evaluation.status.value == "Correct",
+                    score=evaluation.points_earned,
+                    max_score=_step_result_max_score(evaluation, gold_steps, idx),
+                    feedback=evaluation.feedback,
+                    expected=matched_gold,
+                    received=student_step
+                )
+                db.add(step_result)
+
+            total_score += grading_result['total_score']
+            graded_question_ids.add(question.id)
     
     # Update submission
     submission.total_score = total_score
@@ -2940,12 +3871,22 @@ async def approve_submission(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     
-    approvable = {
+    if submission.status == models.SubmissionStatus.PENDING:
+        if not submission.grading_results:
+            raise HTTPException(
+                status_code=400,
+                detail="Nothing to approve — run grading or add scores first",
+            )
+    elif submission.status not in (
         models.SubmissionStatus.AWAITING_APPROVAL,
         models.SubmissionStatus.GRADED,
-    }
-    if submission.status not in approvable:
+    ):
         raise HTTPException(status_code=400, detail="Submission cannot be approved in its current state")
+
+    if submission.total_score is None and submission.grading_results:
+        submission.total_score = float(sum(gr.score for gr in submission.grading_results))
+    if submission.graded_at is None:
+        submission.graded_at = datetime.utcnow()
 
     submission.status = models.SubmissionStatus.APPROVED
     submission.approved_at = datetime.utcnow()
@@ -2964,7 +3905,11 @@ async def reject_submission(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Reject a graded submission and allow resubmission"""
+    """
+    Return submission to pending: student no longer sees scores until re-approved.
+    Grading rows (OCR text, steps, draft scores) are kept so instructors can review
+    the same attempt and adjust grades or ask the student to resubmit.
+    """
     if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
         raise HTTPException(status_code=403, detail="Only professors can reject submissions")
     
@@ -2988,14 +3933,11 @@ async def reject_submission(
     submission.approved_at = None
     submission.approved_by = None
 
-    for grading_result in submission.grading_results:
-        db.delete(grading_result)
-
     db.commit()
 
     return {
         "status": "success",
-        "message": "Submission rejected. Student can resubmit."
+        "message": "Submission returned for review. The student no longer sees grades until you approve. You can still view their work and edit scores below.",
     }
 
 
@@ -3219,6 +4161,248 @@ def _pdf_safe_text(s) -> str:
         if ratio < 0.40 or (symbol_soup / len(result)) > 0.12:
             return "[Question text could not be displayed. Re-upload the exam as PDF or .txt to restore content, or edit manually.]"
     return result
+
+
+def _pdf_pagesize(paper: str):
+    """ReportLab page size tuple for exam PDFs. `paper`: a4, letter, legal (case-insensitive)."""
+    from reportlab.lib.pagesizes import letter, A4, legal
+    key = (paper or "letter").lower().strip()
+    if key == "a4":
+        return A4
+    if key == "legal":
+        return legal
+    return letter
+
+
+def _strip_html_to_plain(s: str) -> str:
+    """Strip tags for PDF text; preserve line breaks from block elements."""
+    import re
+    from html import unescape
+    if not s or not isinstance(s, str):
+        return ""
+    t = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    t = re.sub(r"</p\s*>", "\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = unescape(t)
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n\s*\n+", "\n", t)
+    return t.strip()
+
+
+def _typed_answers_by_question_id(submission) -> dict:
+    """Map question_id -> plain text from stored JSON typed answers."""
+    import json
+    raw = getattr(submission, "typed_answers", None)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        out = {}
+        for a in data or []:
+            qid = a.get("questionId")
+            if qid:
+                out[qid] = _strip_html_to_plain(a.get("typedAnswer", "") or "")
+        return out
+    except Exception:
+        return {}
+
+
+def _append_question_stem_to_story(q, story, q_label, normal_style, heading_style, sub_style, inch, UPLOAD_DIR):
+    """Question heading + rich/plain text + image attachments (no answer area)."""
+    import json as _json
+    from reportlab.platypus import Paragraph, Spacer, Image as RLImage
+    from reportlab.lib.utils import ImageReader
+
+    pts = getattr(q, "points", 0)
+    story.append(Paragraph(f"<b>{_pdf_safe_text(q_label)} ({pts} pts)</b>", heading_style))
+
+    rich = getattr(q, "rich_content", None)
+    if rich:
+        try:
+            rc = _json.loads(rich) if isinstance(rich, str) else rich
+            rich_elements = _rich_content_to_story_elements(
+                rc, normal_style, sub_style, inch, upload_dir=UPLOAD_DIR
+            )
+            story.extend(rich_elements)
+        except Exception as _e:
+            logger.warning(f"Marked PDF rich content error: {_e}")
+            fallback = getattr(q, "text", "") or ""
+            if fallback:
+                story.append(Paragraph(_pdf_safe_text(fallback[:2000]), normal_style))
+    else:
+        plain = getattr(q, "text", "") or ""
+        if plain:
+            story.append(Paragraph(_pdf_safe_text(plain[:2000]), normal_style))
+
+    for att in getattr(q, "attachments", []) or []:
+        if getattr(att, "attachment_type", "") != "image":
+            continue
+        path = UPLOAD_DIR / att.file_path
+        if path.exists():
+            try:
+                reader = ImageReader(str(path))
+                iw, ih = reader.getSize()
+                if iw > 0 and ih > 0:
+                    aspect = ih / float(iw)
+                    max_w = 5.2 * inch
+                    w, h = max_w, max_w * aspect
+                    if h > 5 * inch:
+                        h = 5 * inch
+                        w = h / aspect
+                    story.append(Spacer(1, 0.1 * inch))
+                    story.append(RLImage(str(path), width=w, height=h))
+                    story.append(Spacer(1, 0.1 * inch))
+            except Exception as e:
+                logger.warning(f"Marked PDF attachment skipped: {e}")
+
+
+def _append_reference_solution_only(q, story, sub_style, inch):
+    """Append instructor reference solution (gold steps + final answer) to story."""
+    import re as _re_q
+    from reportlab.platypus import Paragraph, Spacer
+
+    story.append(Spacer(1, 0.08 * inch))
+    story.append(Paragraph("<b>Reference solution (instructor)</b>", sub_style))
+    story.append(Spacer(1, 0.06 * inch))
+    gold_steps = list(getattr(q, "gold_steps", []) or [])
+    if gold_steps:
+        story.append(Paragraph("<i>Model steps:</i>", sub_style))
+        for idx, gs in enumerate(sorted(gold_steps, key=lambda x: getattr(x, "step_number", 0)), 1):
+            step_text = _pdf_safe_text(_clean_step_for_pdf(gs))
+            if step_text:
+                story.append(Paragraph(f"{idx}. {step_text}", sub_style))
+        final_lat = getattr(q, "final_answer_latex", None) or getattr(q, "final_answer", None)
+        if final_lat and str(final_lat).strip():
+            fa = _re_q.sub(r"\$\$?(.*?)\$\$?", r"\1", str(final_lat), flags=_re_q.DOTALL).strip()
+            if fa:
+                fa_img = _render_latex_to_flowable(fa, inch, max_width_inch=3.0)
+                if fa_img:
+                    story.append(Paragraph("<b>Final Answer:</b>", sub_style))
+                    story.append(fa_img)
+                else:
+                    story.append(Paragraph(f"<b>Final Answer:</b> {_pdf_safe_text(fa)}", sub_style))
+    else:
+        final_ans = getattr(q, "final_answer_latex", None) or getattr(q, "final_answer", None)
+        if final_ans and str(final_ans).strip():
+            fa = _re_q.sub(r"\$\$?(.*?)\$\$?", r"\1", str(final_ans), flags=_re_q.DOTALL).strip()
+            fa_img = _render_latex_to_flowable(fa, inch, max_width_inch=3.0)
+            if fa_img:
+                story.append(Paragraph("<b>Final Answer:</b>", sub_style))
+                story.append(fa_img)
+            else:
+                story.append(Paragraph(f"<b>Final Answer:</b> {_pdf_safe_text(fa)}", sub_style))
+        else:
+            story.append(Paragraph("<i>No reference solution stored.</i>", sub_style))
+
+
+def _append_marked_response_block(
+    q,
+    story,
+    q_label,
+    grading_result,
+    typed_fallback_plain: str,
+    normal_style,
+    heading_style,
+    sub_style,
+    inch,
+    UPLOAD_DIR,
+    include_reference_solutions: bool,
+):
+    """One question: stem, student work, scores/feedback, optional reference solution."""
+    from reportlab.platypus import Paragraph, Spacer, Table as RLTable, TableStyle
+    from reportlab.lib import colors as _colors
+
+    _append_question_stem_to_story(
+        q, story, q_label, normal_style, heading_style, sub_style, inch, UPLOAD_DIR
+    )
+
+    story.append(Spacer(1, 0.15 * inch))
+    story.append(Paragraph("<b>Student response</b>", sub_style))
+    story.append(Spacer(1, 0.06 * inch))
+
+    answer_plain = ""
+    if grading_result:
+        ext = grading_result.extracted_text or ""
+        if ext.strip():
+            answer_plain = _strip_html_to_plain(ext) or _pdf_safe_text(ext[:4000])
+        elif grading_result.extracted_latex:
+            answer_plain = _pdf_safe_text(str(grading_result.extracted_latex))
+    if not answer_plain.strip() and typed_fallback_plain:
+        answer_plain = _pdf_safe_text(typed_fallback_plain[:4000])
+
+    if answer_plain.strip():
+        for chunk in [answer_plain[i : i + 900] for i in range(0, len(answer_plain), 900)]:
+            story.append(Paragraph(_pdf_safe_text(chunk), normal_style))
+    else:
+        story.append(Paragraph("<i>No submitted work captured for this question.</i>", sub_style))
+
+    story.append(Spacer(1, 0.12 * inch))
+
+    if grading_result:
+        sc = grading_result.score
+        mx = grading_result.max_score
+        ok = getattr(grading_result, "is_correct", False)
+        status_word = "Correct" if ok else "See feedback"
+        story.append(
+            Paragraph(
+                f"<b>Score:</b> {_pdf_safe_text(str(sc))} / {_pdf_safe_text(str(mx))} pts "
+                f" | <b>Status:</b> {_pdf_safe_text(status_word)}",
+                sub_style,
+            )
+        )
+        fb = grading_result.feedback or ""
+        if fb.strip():
+            story.append(Spacer(1, 0.05 * inch))
+            story.append(Paragraph(f"<b>Feedback:</b> {_pdf_safe_text(fb[:1500])}", normal_style))
+
+        steps = list(grading_result.step_results or [])
+        if steps:
+            story.append(Spacer(1, 0.1 * inch))
+            story.append(Paragraph("<b>Step breakdown</b>", sub_style))
+            hdr = [
+                Paragraph("<b>Step</b>", sub_style),
+                Paragraph("<b>OK</b>", sub_style),
+                Paragraph("<b>Points</b>", sub_style),
+                Paragraph("<b>Notes</b>", sub_style),
+            ]
+            rows = [hdr]
+            for st in sorted(steps, key=lambda x: x.step_number):
+                yn = "Yes" if st.is_correct else "No"
+                pts = f"{float(st.score):.2f}".rstrip("0").rstrip(".") + f"/{int(st.max_score)}"
+                note = (st.feedback or "")[:220]
+                rows.append(
+                    [
+                        Paragraph(str(st.step_number), normal_style),
+                        Paragraph(_pdf_safe_text(yn), normal_style),
+                        Paragraph(_pdf_safe_text(pts), normal_style),
+                        Paragraph(_pdf_safe_text(note), normal_style),
+                    ]
+                )
+            tw = 5.2 * inch
+            c1, c2, c3 = 0.5 * inch, 0.55 * inch, 0.85 * inch
+            col_w = [c1, c2, c3, tw - c1 - c2 - c3]
+            tbl = RLTable(rows, colWidths=col_w, repeatRows=1)
+            tbl.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), _colors.Color(0.9, 0.9, 0.95)),
+                        ("GRID", (0, 0), (-1, -1), 0.5, _colors.grey),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ]
+                )
+            )
+            story.append(Spacer(1, 0.06 * inch))
+            story.append(tbl)
+    else:
+        story.append(Paragraph("<i>Not auto-graded yet (no grading record).</i>", sub_style))
+
+    if include_reference_solutions:
+        _append_reference_solution_only(q, story, sub_style, inch)
+
+    story.append(Spacer(1, 0.28 * inch))
 
 
 def _render_latex_to_flowable(latex_str, inch, max_width_inch=5.2, fontsize=12):
@@ -3828,11 +5012,12 @@ def _display_safe_text(s) -> str:
 async def download_exam_pdf(
     exam_id: str,
     include_solutions: bool = False,
+    paper: str = "letter",
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Download exam as PDF. include_solutions=true appends gold solution steps."""
-    from reportlab.lib.pagesizes import letter
+    """Download exam as PDF. include_solutions=true appends gold solution steps.
+    paper=a4|letter|legal (default letter)."""
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
@@ -3855,7 +5040,8 @@ async def download_exam_pdf(
     course = db.query(models.Course).filter(models.Course.id == exam.course_id).first()
     
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72,
+    pagesize = _pdf_pagesize(paper)
+    doc = SimpleDocTemplate(buffer, pagesize=pagesize, rightMargin=72, leftMargin=72,
                            topMargin=72, bottomMargin=18)
     
     from reportlab.platypus import Image as RLImage, Table as RLTable, TableStyle
@@ -3979,12 +5165,13 @@ async def download_exam_pdf(
 async def view_exam_pdf(
     exam_id: str,
     include_solutions: bool = False,
+    paper: str = "letter",
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """View/download exam PDF - available to both teachers and students.
-    include_solutions=true appends gold solution steps and final answers."""
-    from reportlab.lib.pagesizes import letter
+    include_solutions=true appends gold solution steps and final answers.
+    paper=a4|letter|legal (default letter)."""
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
@@ -4008,7 +5195,8 @@ async def view_exam_pdf(
             raise HTTPException(status_code=403, detail="Exam is not published")
     
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=72, leftMargin=72,
+    pagesize_v = _pdf_pagesize(paper)
+    doc = SimpleDocTemplate(buffer, pagesize=pagesize_v, rightMargin=72, leftMargin=72,
                            topMargin=72, bottomMargin=18)
     
     from reportlab.platypus import Image as RLImage, Table as RLTable, TableStyle

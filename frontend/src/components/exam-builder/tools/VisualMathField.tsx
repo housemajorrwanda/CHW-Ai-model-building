@@ -4,7 +4,7 @@ import 'mathlive/static.css';
 
 export type VisualMathFieldHandle = {
   /** Insert a LaTeX fragment at the cursor (placeholders become active like Word equation editor). */
-  insert: (latex: string) => void;
+  insert: (latex: string) => boolean;
   focus: () => void;
   getLatex: () => string;
 };
@@ -24,13 +24,28 @@ export const VisualMathField = forwardRef<VisualMathFieldHandle, Props>(function
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mfRef = useRef<MathfieldElement | null>(null);
+  const onChangeRef = useRef(onChange);
+  const valueRef = useRef(value);
+  onChangeRef.current = onChange;
+  valueRef.current = value;
 
   useImperativeHandle(ref, () => ({
-    insert: (latex: string) => {
+    insert: (latexSnippet: string) => {
       const mf = mfRef.current;
-      if (!mf) return;
-      mf.insert(latex, { selectionMode: 'placeholder', focus: true });
-      queueMicrotask(() => onChange(mf.getValue('latex')));
+      if (!mf) return false;
+      const before = mf.getValue('latex');
+      mf.focus();
+      const opts = { format: 'latex' as const, selectionMode: 'placeholder' as const, focus: true };
+      let after = before;
+      let ok = mf.insert(latexSnippet, opts);
+      after = mf.getValue('latex');
+      if (after === before) {
+        mf.executeCommand(['insert', latexSnippet, opts]);
+        after = mf.getValue('latex');
+        ok = ok || after !== before;
+      }
+      queueMicrotask(() => onChangeRef.current(after));
+      return ok || after !== before;
     },
     focus: () => {
       mfRef.current?.focus();
@@ -57,8 +72,20 @@ export const VisualMathField = forwardRef<VisualMathFieldHandle, Props>(function
         mf.smartFence = true;
         mf.smartSuperscript = true;
         mf.mathVirtualKeyboardPolicy = 'auto';
-        mf.value = value;
-        mf.addEventListener('input', () => onChange(mf!.getValue('latex')));
+        // Avoid stale closure: MathLive loads async; parent state may already include toolbar inserts.
+        mf.value = valueRef.current;
+        mf.addEventListener('input', () => onChangeRef.current(mf!.getValue('latex')));
+        /** Plain-text LaTeX from clipboard (Overleaf, docs, ChatGPT) — default paste loses backslashes. */
+        mf.addEventListener('paste', (ev: Event) => {
+          const e = ev as ClipboardEvent;
+          const plain = e.clipboardData?.getData('text/plain') ?? '';
+          if (!plain.trim() || plain.length > 16_000) return;
+          if (!plain.includes('\\') || !/\\[a-zA-Z]+/.test(plain)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          mf!.insert(plain.trim(), { format: 'latex', selectionMode: 'after', focus: true });
+          queueMicrotask(() => onChangeRef.current(mf!.getValue('latex')));
+        });
         containerRef.current.appendChild(mf);
         mfRef.current = mf;
       })

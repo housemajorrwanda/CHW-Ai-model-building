@@ -15,6 +15,14 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
+import {
   ArrowLeft,
   FileText,
   Calendar,
@@ -34,6 +42,50 @@ import {
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+
+/** Question tree returned by GET /exams/:id (top-level and nested sub-questions). */
+interface ExamDetailQuestion {
+  id: string;
+  number: number;
+  text?: string;
+  richContent?: unknown;
+  points: number;
+  attachments?: Array<{
+    id: string;
+    filePath: string;
+    filename: string;
+    attachmentType?: string;
+  }>;
+  embeddedContent?: Array<{ contentType?: string }>;
+  goldSolutionSteps?: Array<{
+    stepNumber: number;
+    points: number;
+    required?: boolean;
+    description?: string;
+    expression?: string;
+    latex?: string;
+  }>;
+  finalAnswer?: string;
+  finalAnswerLatex?: string;
+  subQuestions?: ExamDetailQuestion[];
+}
+
+interface ExamDetailData {
+  id: string;
+  title: string;
+  courseId: string;
+  description?: string | null;
+  dueDate?: string | null;
+  duration?: number | null;
+  isPublished: boolean;
+  totalPoints?: number;
+  questions?: ExamDetailQuestion[];
+}
+
+interface CourseDetailSummary {
+  code: string;
+  name?: string;
+}
 
 export default function ExamDetail() {
   const { examId } = useParams<{ examId: string }>();
@@ -80,6 +132,20 @@ export default function ExamDetail() {
 
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  /** Paper size for PDF export (matches backend `paper` query param). */
+  const [pdfPaper, setPdfPaper] = useState<'a4' | 'letter' | 'legal'>('a4');
+
+  const { data: exam, isLoading } = useQuery({
+    queryKey: ['exam', examId],
+    queryFn: () => api.exams.getById(examId!) as Promise<ExamDetailData>,
+    enabled: !!examId,
+  });
+
+  const { data: course } = useQuery({
+    queryKey: ['course', exam?.courseId],
+    queryFn: () => api.courses.getById(exam!.courseId) as Promise<CourseDetailSummary>,
+    enabled: !!exam?.courseId,
+  });
 
   const downloadPDF = async (includeSolutions: boolean) => {
     if (!examId || !exam) return;
@@ -88,7 +154,7 @@ export default function ExamDetail() {
     try {
       const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
       const token = localStorage.getItem('auth_token');
-      const url = `${API_BASE_URL}/exams/${examId}/view-pdf?include_solutions=${includeSolutions}&t=${Date.now()}`;
+      const url = `${API_BASE_URL}/exams/${examId}/view-pdf?include_solutions=${includeSolutions}&paper=${encodeURIComponent(pdfPaper)}&t=${Date.now()}`;
       const response = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -122,20 +188,6 @@ export default function ExamDetail() {
     deleteExamMutation.mutate(examId);
   };
 
-  // Fetch exam details
-  const { data: exam, isLoading } = useQuery({
-    queryKey: ['exam', examId],
-    queryFn: () => api.exams.getById(examId!),
-    enabled: !!examId,
-  });
-
-  // Fetch course info
-  const { data: course } = useQuery({
-    queryKey: ['course', exam?.courseId],
-    queryFn: () => api.courses.getById(exam!.courseId),
-    enabled: !!exam?.courseId,
-  });
-
   if (isLoading) {
     return (
       <DashboardLayout>
@@ -157,7 +209,7 @@ export default function ExamDetail() {
     );
   }
 
-  const renderQuestion = (question: any, parentNumber: string = '', level: number = 0) => {
+  const renderQuestion = (question: ExamDetailQuestion, parentNumber: string = '', level: number = 0) => {
     const questionNumber = parentNumber ? `${parentNumber}.${question.number}` : question.number.toString();
 
     return (
@@ -191,7 +243,7 @@ export default function ExamDetail() {
             <div className="space-y-3">
               <p className="text-sm font-semibold">Diagrams / Images</p>
               <div className="flex flex-wrap gap-4">
-                {question.attachments.map((att: any) => {
+                {question.attachments.map((att) => {
                   const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
                   const origin = apiBase.replace(/\/api\/?$/, '');
                   const src = att.filePath?.startsWith('http') ? att.filePath : `${origin}${att.filePath}`;
@@ -219,7 +271,7 @@ export default function ExamDetail() {
           {/* Sub-questions (a), (b), (c) */}
           {question.subQuestions && question.subQuestions.length > 0 && level === 0 && (
             <div className="space-y-3">
-              {question.subQuestions.map((sub: any, idx: number) => (
+              {question.subQuestions.map((sub, idx: number) => (
                 <div key={sub.id || idx} className="flex gap-3 pl-2 border-l-2 border-primary/30">
                   <span className="font-semibold text-primary shrink-0 w-6 pt-0.5">
                     ({String.fromCharCode(97 + idx)})
@@ -240,7 +292,7 @@ export default function ExamDetail() {
             <div>
               <p className="text-sm font-semibold mb-2">Embedded Content:</p>
               <div className="flex flex-wrap gap-2">
-                {question.embeddedContent.map((content: any, idx: number) => (
+                {question.embeddedContent.map((content, idx: number) => (
                   <Badge key={idx} variant="secondary" className="gap-1">
                     <Atom className="h-3 w-3" />
                     {content.contentType}
@@ -258,7 +310,7 @@ export default function ExamDetail() {
                 <p className="text-sm font-semibold">Gold Solution Steps:</p>
               </div>
               <div className="space-y-2">
-                {question.goldSolutionSteps.map((step: any, idx: number) => (
+                {question.goldSolutionSteps.map((step, idx: number) => (
                   <div key={idx} className="p-3 bg-green-50 border border-green-200 rounded-lg">
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs font-semibold text-green-900">
@@ -303,7 +355,7 @@ export default function ExamDetail() {
           {question.subQuestions && question.subQuestions.length > 0 && (
             <div className="border-t pt-4 space-y-3">
               <p className="text-sm font-semibold">Sub-questions:</p>
-              {question.subQuestions.map((subQ: any) =>
+              {question.subQuestions.map((subQ) =>
                 renderQuestion(subQ, questionNumber, level + 1)
               )}
             </div>
@@ -313,10 +365,12 @@ export default function ExamDetail() {
     );
   };
 
-  const totalPoints = exam.questions?.reduce((sum: number, q: any) => {
-    const subPoints = q.subQuestions?.reduce((subSum: number, sub: any) => subSum + sub.points, 0) || 0;
-    return sum + q.points + subPoints;
-  }, 0) || 0;
+  const totalPoints =
+    exam.questions?.reduce((sum, q) => {
+      const subPoints =
+        q.subQuestions?.reduce((subSum, sub) => subSum + sub.points, 0) || 0;
+      return sum + q.points + subPoints;
+    }, 0) || 0;
 
   return (
     <DashboardLayout>
@@ -430,7 +484,7 @@ export default function ExamDetail() {
           <CardContent>
             {exam.questions && exam.questions.length > 0 ? (
               <div className="space-y-6">
-                {exam.questions.map((question: any, idx: number) => (
+                {exam.questions.map((question, idx: number) => (
                   <div key={question.id || idx}>
                     {renderQuestion(question)}
                     {idx < exam.questions.length - 1 && (
@@ -458,9 +512,25 @@ export default function ExamDetail() {
               Download Exam PDF
             </DialogTitle>
             <DialogDescription>
-              Choose what to include in the downloaded PDF.
+              Choose paper size and what to include in the downloaded PDF.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="space-y-2 pt-2">
+            <Label htmlFor="pdf-paper" className="text-xs text-muted-foreground">
+              Paper size
+            </Label>
+            <Select value={pdfPaper} onValueChange={(v) => setPdfPaper(v as 'a4' | 'letter' | 'legal')}>
+              <SelectTrigger id="pdf-paper" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="a4">A4 (210 × 297 mm)</SelectItem>
+                <SelectItem value="letter">US Letter (8.5 × 11 in)</SelectItem>
+                <SelectItem value="legal">US Legal (8.5 × 14 in)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           <div className="grid grid-cols-1 gap-3 pt-2">
             <button

@@ -217,10 +217,14 @@ export const examsAPI = {
     });
   },
 
-  async downloadPDF(examId: string, includeSolutions: boolean = false) {
+  async downloadPDF(
+    examId: string,
+    includeSolutions: boolean = false,
+    paper: 'a4' | 'letter' | 'legal' = 'letter'
+  ) {
     const token = getAuthToken();
     const response = await fetch(
-      `${API_BASE_URL}/exams/${examId}/download?include_solutions=${includeSolutions}&t=${Date.now()}`,
+      `${API_BASE_URL}/exams/${examId}/download?include_solutions=${includeSolutions}&paper=${encodeURIComponent(paper)}&t=${Date.now()}`,
       { headers: { 'Authorization': `Bearer ${token}`, 'Cache-Control': 'no-cache' } }
     );
     if (!response.ok) throw new Error('Failed to download PDF');
@@ -242,7 +246,52 @@ export const examsAPI = {
     }
     return response.json();
   },
+
+  /** Preview how a full-answer PDF will map to exam questions (take-exam flow). */
+  async previewAnswerPdf(examId: string, file: File) {
+    const token = getAuthToken();
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    const response = await fetch(`${API_BASE_URL}/exams/${examId}/preview-answer-pdf`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      const detail = err.detail;
+      let message = 'Preview failed';
+      if (typeof detail === 'string') message = detail;
+      else if (Array.isArray(detail) && detail[0]?.msg) message = detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join('; ');
+      throw new Error(message);
+    }
+    return response.json() as Promise<AnswerPdfPreviewResponse>;
+  },
 };
+
+/** Response from POST /exams/:id/preview-answer-pdf */
+export interface AnswerPdfPreviewResponse {
+  strategy: string;
+  pdfPageCount: number;
+  topLevelCount: number;
+  rows: Array<{
+    questionNumber: number;
+    questionLabel: string;
+    source: string;
+    subParts: Array<{
+      part: string | null;
+      chars: number | null;
+      hasContent: boolean | null;
+      delivery: string;
+    }>;
+    note?: string;
+  }>;
+  warnings: string[];
+  monolithicDetected: boolean;
+  summary: string;
+}
 
 // ============================================================================
 // Submissions API
@@ -321,6 +370,28 @@ export const submissionsAPI = {
       method: 'PUT',
       body: JSON.stringify(adjustments),
     });
+  },
+
+  /** Marked submission: questions, student work, scores, step feedback; optional model solutions (professor). */
+  async downloadMarkedPdf(
+    submissionId: string,
+    options?: {
+      paper?: 'a4' | 'letter' | 'legal';
+      includeReferenceSolutions?: boolean;
+    }
+  ) {
+    const token = getAuthToken();
+    const paper = options?.paper ?? 'a4';
+    const ref = options?.includeReferenceSolutions ? 'true' : 'false';
+    const response = await fetch(
+      `${API_BASE_URL}/submissions/${submissionId}/marked-pdf?paper=${encodeURIComponent(paper)}&include_reference_solutions=${ref}&t=${Date.now()}`,
+      { headers: { Authorization: `Bearer ${token}`, 'Cache-Control': 'no-cache' } }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || 'Failed to download marked PDF');
+    }
+    return response.blob();
   },
 };
 

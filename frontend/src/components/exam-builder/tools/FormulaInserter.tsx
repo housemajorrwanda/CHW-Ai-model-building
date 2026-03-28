@@ -47,14 +47,15 @@ const commonFormulas: { label: string; latex: string; variables?: TemplateVar[] 
   { label: 'Determinant', latex: '\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}' },
 ];
 
+/** MathLive treats `#?` as fillable holes; empty `{}` often does nothing on insert. */
 const STRUCTURES: { latex: string; cursorOffset: number; label: string }[] = [
-  { label: 'a/b', latex: '\\frac{}{}', cursorOffset: 6 },
-  { label: 'x²', latex: '^{}', cursorOffset: 2 },
-  { label: 'x₂', latex: '_{}', cursorOffset: 2 },
-  { label: '√', latex: '\\sqrt{}', cursorOffset: 6 },
-  { label: '∫', latex: '\\int_{}^{}', cursorOffset: 6 },
-  { label: 'Σ', latex: '\\sum_{i=1}^{n}', cursorOffset: 10 },
-  { label: '( )', latex: '\\left( \\right)', cursorOffset: 7 },
+  { label: 'a/b', latex: '\\frac{#?}{#?}', cursorOffset: 6 },
+  { label: 'x²', latex: '^{#?}', cursorOffset: 2 },
+  { label: 'x₂', latex: '_{#?}', cursorOffset: 2 },
+  { label: '√', latex: '\\sqrt{#?}', cursorOffset: 6 },
+  { label: '∫', latex: '\\int_{#?}^{#?}', cursorOffset: 6 },
+  { label: 'Σ', latex: '\\sum_{#?}^{#?}', cursorOffset: 7 },
+  { label: '( )', latex: '\\left(#?\\right)', cursorOffset: 6 },
   { label: '2×2', latex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', cursorOffset: 22 },
 ];
 const BASIC_STRUCTURES = STRUCTURES.slice(0, 4);
@@ -70,53 +71,58 @@ const MORE_SYMBOLS_ROW3 = SYMBOLS_RELATIONS;
 
 /** Brackets: basic pairs + more (with separators, floor/ceiling, absolute/norm) */
 const BRACKETS_BASIC: { label: string; latex: string; cursorOffset: number }[] = [
-  { label: '( )', latex: '\\left( \\right)', cursorOffset: 7 },
-  { label: '[ ]', latex: '\\left[ \\right]', cursorOffset: 7 },
-  { label: '{ }', latex: '\\left\\{ \\right\\}', cursorOffset: 8 },
-  { label: '⟨ ⟩', latex: '\\langle \\rangle', cursorOffset: 8 },
+  { label: '( )', latex: '\\left(#?\\right)', cursorOffset: 6 },
+  { label: '[ ]', latex: '\\left[#?\\right]', cursorOffset: 6 },
+  { label: '{ }', latex: '\\left\\{#?\\right\\}', cursorOffset: 7 },
+  { label: '⟨ ⟩', latex: '\\langle#?\\rangle', cursorOffset: 8 },
 ];
 const BRACKETS_MORE: { label: string; latex: string; cursorOffset: number }[] = [
-  { label: '( | )', latex: '\\left( \\middle| \\right)', cursorOffset: 14 },
-  { label: '{ | }', latex: '\\left\\{ \\middle| \\right\\}', cursorOffset: 16 },
-  { label: '⟨ | ⟩', latex: '\\langle \\middle| \\rangle', cursorOffset: 16 },
-  { label: '⟨ | | ⟩', latex: '\\langle \\middle| \\middle| \\rangle', cursorOffset: 24 },
-  { label: '⌊ ⌋', latex: '\\lfloor \\rfloor', cursorOffset: 8 },
-  { label: '⌈ ⌉', latex: '\\lceil \\rceil', cursorOffset: 8 },
-  { label: '| |', latex: '\\left| \\right|', cursorOffset: 8 },
-  { label: '‖ ‖', latex: '\\left\\| \\right\\|', cursorOffset: 11 },
+  { label: '( | )', latex: '\\left(#?\\middle|#?\\right)', cursorOffset: 6 },
+  { label: '{ | }', latex: '\\left\\{#?\\middle|#?\\right\\}', cursorOffset: 7 },
+  { label: '⟨ | ⟩', latex: '\\langle#?\\middle|#?\\rangle', cursorOffset: 8 },
+  { label: '⟨ | | ⟩', latex: '\\langle#?\\middle|#?\\middle|#?\\rangle', cursorOffset: 8 },
+  { label: '⌊ ⌋', latex: '\\lfloor#?\\rfloor', cursorOffset: 8 },
+  { label: '⌈ ⌉', latex: '\\lceil#?\\rceil', cursorOffset: 8 },
+  { label: '| |', latex: '\\left|#?\\right|', cursorOffset: 7 },
+  { label: '‖ ‖', latex: '\\left\\|#?\\right\\|', cursorOffset: 8 },
 ];
 
 /** Functions: trig, inverse, hyperbolic */
 const FUNCTIONS_BASIC: { label: string; latex: string; cursorOffset: number }[] = [
-  { label: 'sin', latex: '\\sin{}', cursorOffset: 5 },
-  { label: 'cos', latex: '\\cos{}', cursorOffset: 5 },
-  { label: 'tan', latex: '\\tan{}', cursorOffset: 5 },
+  { label: 'sin', latex: '\\sin\\left(#?\\right)', cursorOffset: 6 },
+  { label: 'cos', latex: '\\cos\\left(#?\\right)', cursorOffset: 6 },
+  { label: 'tan', latex: '\\tan\\left(#?\\right)', cursorOffset: 6 },
 ];
 const FUNCTIONS_MORE: { label: string; latex: string; cursorOffset: number }[] = [
-  { label: 'csc', latex: '\\csc{}', cursorOffset: 5 },
-  { label: 'sec', latex: '\\sec{}', cursorOffset: 5 },
-  { label: 'cot', latex: '\\cot{}', cursorOffset: 5 },
-  { label: 'sin⁻¹', latex: '\\arcsin{}', cursorOffset: 8 },
-  { label: 'cos⁻¹', latex: '\\arccos{}', cursorOffset: 8 },
-  { label: 'tan⁻¹', latex: '\\arctan{}', cursorOffset: 8 },
-  { label: 'sinh', latex: '\\sinh{}', cursorOffset: 6 },
-  { label: 'cosh', latex: '\\cosh{}', cursorOffset: 6 },
-  { label: 'tanh', latex: '\\tanh{}', cursorOffset: 6 },
+  { label: 'csc', latex: '\\csc\\left(#?\\right)', cursorOffset: 6 },
+  { label: 'sec', latex: '\\sec\\left(#?\\right)', cursorOffset: 6 },
+  { label: 'cot', latex: '\\cot\\left(#?\\right)', cursorOffset: 6 },
+  { label: 'sin⁻¹', latex: '\\arcsin\\left(#?\\right)', cursorOffset: 9 },
+  { label: 'cos⁻¹', latex: '\\arccos\\left(#?\\right)', cursorOffset: 9 },
+  { label: 'tan⁻¹', latex: '\\arctan\\left(#?\\right)', cursorOffset: 9 },
+  { label: 'sinh', latex: '\\sinh\\left(#?\\right)', cursorOffset: 7 },
+  { label: 'cosh', latex: '\\cosh\\left(#?\\right)', cursorOffset: 7 },
+  { label: 'tanh', latex: '\\tanh\\left(#?\\right)', cursorOffset: 7 },
 ];
 
 /** Large operators with limits */
 const LARGE_OPS_BASIC: { label: string; latex: string; cursorOffset: number }[] = [
-  { label: '∫', latex: '\\int_{}^{}', cursorOffset: 6 },
-  { label: 'Σ', latex: '\\sum_{}^{}', cursorOffset: 7 },
-  { label: 'Π', latex: '\\prod_{}^{}', cursorOffset: 8 },
+  { label: '∫', latex: '\\int_{#?}^{#?}', cursorOffset: 6 },
+  { label: 'Σ', latex: '\\sum_{#?}^{#?}', cursorOffset: 7 },
+  { label: 'Π', latex: '\\prod_{#?}^{#?}', cursorOffset: 8 },
 ];
 const LARGE_OPS_MORE: { label: string; latex: string; cursorOffset: number }[] = [
-  { label: '∬', latex: '\\iint_{}^{}', cursorOffset: 9 },
-  { label: '∭', latex: '\\iiint_{}^{}', cursorOffset: 10 },
-  { label: '∮', latex: '\\oint_{}^{}', cursorOffset: 9 },
+  { label: '∬', latex: '\\iint_{#?}^{#?}', cursorOffset: 9 },
+  { label: '∭', latex: '\\iiint_{#?}^{#?}', cursorOffset: 10 },
+  { label: '∮', latex: '\\oint_{#?}^{#?}', cursorOffset: 9 },
 ];
 
 const FORMULA_INPUT_MODE_KEY = 'mathgrade:formula-input-mode';
+
+/** MathLive uses `{#?}` / `#?` for holes; map to normal empty TeX groups for the LaTeX textarea. */
+function mathLiveSnippetToPlainLatex(snippet: string): string {
+  return snippet.replace(/\{#\?\}/g, '{}').replace(/#\?/g, '{}');
+}
 
 function getStoredFormulaInputMode(): 'visual' | 'latex' {
   try {
@@ -231,12 +237,18 @@ export function FormulaInserter({
   /** Palettes: visual editor uses MathLive insert; LaTeX tab uses textarea cursor. */
   const insertSnippet = useCallback(
     (snippet: string, textareaOffset: number) => {
-      if (formulaInputMode === 'visual' && mathFieldRef.current) {
-        mathFieldRef.current.insert(snippet);
+      if (formulaInputMode === 'visual') {
+        // Ref is always an object; real Mathfield mounts async — insert() returns false until ready.
+        const ok = mathFieldRef.current?.insert(snippet);
+        if (ok) {
+          setError('');
+          return;
+        }
+        setLatex((prev) => `${prev}${snippet}`);
         setError('');
         return;
       }
-      insertAtCursor(snippet, textareaOffset);
+      insertAtCursor(mathLiveSnippetToPlainLatex(snippet), textareaOffset);
     },
     [formulaInputMode, insertAtCursor]
   );
@@ -355,7 +367,9 @@ export function FormulaInserter({
               <TabsContent value="visual" className="mt-3 space-y-3">
                 <p className="text-sm text-muted-foreground leading-relaxed">
                   Build equations like in Microsoft Word: tap the box below, use the on-screen keyboard, or use the
-                  structure buttons under this section. No LaTeX knowledge needed.
+                  structure buttons under this section. No LaTeX knowledge needed. Pasting <strong>LaTeX</strong>{' '}
+                  (with backslashes, e.g. <code className="text-xs">\frac</code>) is detected and kept; rich text from
+                  Word or the web is usually plain characters only — use the LaTeX tab or type here for full control.
                 </p>
                 <VisualMathField
                   ref={mathFieldRef}
@@ -389,7 +403,8 @@ export function FormulaInserter({
               </TabsContent>
             </Tabs>
 
-            <p className="text-xs text-muted-foreground pt-1 border-t">
+            <div className="space-y-3 pt-1 border-t">
+            <p className="text-xs text-muted-foreground">
               Structures &amp; symbols — tap to insert into the{' '}
               {formulaInputMode === 'visual'
                 ? 'visual editor (top).'
@@ -642,6 +657,8 @@ export function FormulaInserter({
                   </div>
                 </div>
               )}
+            </div>
+
             </div>
 
             {formulaInputMode === 'latex' && (

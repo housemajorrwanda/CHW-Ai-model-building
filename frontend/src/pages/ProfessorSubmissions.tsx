@@ -101,7 +101,9 @@ export default function ProfessorSubmissions() {
   const handleReject = async (submissionId: string) => {
     try {
       await submissionsAPI.reject(submissionId);
-      toast.success('Submission rejected. Student can resubmit.');
+      toast.success(
+        'Returned for review — the student no longer sees grades. Open the submission to view their work and edit scores.'
+      );
       await loadData();
     } catch (error: any) {
       toast.error('Failed to reject: ' + error.message);
