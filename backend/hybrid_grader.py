@@ -1,5 +1,6 @@
 from typing import List, Dict, Optional, Tuple
 import logging
+import re
 
 from math_grader import MathGrader, Step as MathStep, StepEvaluation, StepStatus as MathStepStatus
 from grading.scoring_engine import ScoringEngine
@@ -7,6 +8,127 @@ from grading.matching_engine import MatchingEngine
 from grading.step import Step as GradingStep, GradedStep, StepStatus as GradingStepStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _prose_match_candidate_segments(full_text: str) -> List[str]:
+    """
+    Build overlapping shards (full answer, sentences, lines, windows) so rubric
+    lines can match prose extracted from PDFs even when the student did not
+    break work into numbered steps.
+    """
+    full_text = (full_text or "").strip()
+    if not full_text:
+        return []
+    seen: set = set()
+    out: List[str] = []
+
+    def add_fragment(s: str) -> None:
+        s = (s or "").strip()
+        if len(s) < 10:
+            return
+        key = s[:160].lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(s)
+
+    add_fragment(full_text)
+    for piece in re.split(r"(?<=[.!?])\s+", full_text):
+        add_fragment(piece)
+    for line in full_text.splitlines():
+        add_fragment(line.strip())
+    if len(full_text) > 200 and len(out) < 5:
+        window = 200
+        step = max(60, window // 2)
+        for i in range(0, max(1, len(full_text) - 50), step):
+            add_fragment(full_text[i : i + window])
+    return out if out else [full_text]
+
+
+def _try_prose_rubric_grade(full_text: str, gold_steps: List[MathStep]) -> Optional[Dict]:
+    """
+    Match each rubric item to the best passage in the full answer (greedy, no
+    segment reuse). Used when step-by-step math/ML grading returns zero points
+    but the answer is long-form text (common for PDF uploads).
+    """
+    full_text = (full_text or "").strip()
+    if len(full_text) < 30 or not gold_steps:
+        return None
+
+    segs = _prose_match_candidate_segments(full_text)
+    matcher = MatchingEngine(use_symbolic=True, use_ml=True, similarity_threshold=0.42)
+    used_seg: set = set()
+    evaluations: List[StepEvaluation] = []
+    display_steps: List[str] = []
+    total = 0.0
+    max_score = sum(float(gs.points) for gs in gold_steps)
+
+    for gi, gold in enumerate(gold_steps):
+        gtext = (gold.content or "").strip()
+        if not gtext:
+            evaluations.append(
+                StepEvaluation(
+                    MathStepStatus.INCORRECT,
+                    0.0,
+                    "Empty rubric item",
+                    matched_gold_step=None,
+                )
+            )
+            display_steps.append("—")
+            continue
+
+        best_j: Optional[int] = None
+        best_score = 0.0
+        best_strat = ""
+        for j, seg in enumerate(segs):
+            if j in used_seg:
+                continue
+            score, strat = matcher.match(seg, gtext, None)
+            if score > best_score:
+                best_score = score
+                best_j = j
+                best_strat = strat
+
+        if best_j is not None and best_score >= 0.36:
+            used_seg.add(best_j)
+            seg_text = segs[best_j]
+            if best_score >= 0.9:
+                status = MathStepStatus.CORRECT
+                pts = float(gold.points)
+            elif best_score >= 0.5:
+                status = MathStepStatus.PARTIALLY_CORRECT
+                pts = round(float(gold.points) * min(1.0, best_score), 2)
+            else:
+                status = MathStepStatus.PARTIALLY_CORRECT
+                pts = round(float(gold.points) * best_score * 0.78, 2)
+            pts = min(pts, float(gold.points))
+            fb = f"Rubric match ({best_strat}, {best_score:.0%})"
+            evaluations.append(
+                StepEvaluation(status, pts, fb, matched_gold_step=gi)
+            )
+            display_steps.append(seg_text if len(seg_text) <= 2000 else seg_text[:1997] + "...")
+            total += pts
+        else:
+            evaluations.append(
+                StepEvaluation(
+                    MathStepStatus.INCORRECT,
+                    0.0,
+                    "No passage in the answer clearly matches this rubric item",
+                    matched_gold_step=None,
+                )
+            )
+            display_steps.append("—")
+
+    if total <= 0 or len(evaluations) != len(gold_steps):
+        return None
+
+    return {
+        "evaluations": evaluations,
+        "total_score": round(total, 2),
+        "max_score": max_score,
+        "strategies_used": ["prose_rubric"] * len(evaluations),
+        "student_steps_for_storage": display_steps,
+    }
 
 
 class HybridGrader:
@@ -105,7 +227,22 @@ class HybridGrader:
             (results['total_score'] / results['max_score'] * 100) 
             if results['max_score'] > 0 else 0.0
         )
-        
+
+        combined = "\n".join(s.strip() for s in student_steps if s and s.strip()).strip()
+        if (
+            results["total_score"] == 0
+            and results.get("max_score", 0) > 0
+            and len(combined) >= 40
+        ):
+            prose = _try_prose_rubric_grade(combined, self.gold_steps)
+            if prose and prose["total_score"] > results["total_score"]:
+                results = prose
+                results["percentage"] = (
+                    (results["total_score"] / results["max_score"] * 100)
+                    if results["max_score"] > 0
+                    else 0.0
+                )
+
         return results
     
     def _combine_results(self, 

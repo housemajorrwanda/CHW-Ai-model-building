@@ -2803,7 +2803,8 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                 
                 grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
-                
+                steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
+
                 print(f"  Grading result: {grading_result['total_score']}/{grading_result['max_score']} ({grading_result['percentage']:.1f}%)")
                 # Print evaluation details
                 for idx, eval_obj in enumerate(grading_result['evaluations']):
@@ -2828,7 +2829,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
 
                 # Store step results
                 for idx, (student_step, evaluation) in enumerate(
-                    zip(student_steps, grading_result['evaluations']), start=1
+                    zip(steps_for_results, grading_result['evaluations']), start=1
                 ):
                     matched_gold = None
                     if evaluation.matched_gold_step is not None:
@@ -2926,6 +2927,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
 
                 grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
+                steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
 
                 logger.info(
                     f"OCR grading Q{question.number}: "
@@ -2950,7 +2952,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                 graded_question_ids.add(question.id)
 
                 for idx, (student_step, evaluation) in enumerate(
-                    zip(student_steps, grading_result['evaluations']), start=1
+                    zip(steps_for_results, grading_result['evaluations']), start=1
                 ):
                     matched_gold = None
                     if evaluation.matched_gold_step is not None:
@@ -3642,6 +3644,7 @@ async def grade_submission(
                 
                 grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
                 grading_result = grader.grade(student_steps)
+                steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
                 
                 # Store grading result
                 db_grading_result = models.GradingResult(
@@ -3659,7 +3662,7 @@ async def grade_submission(
                 
                 # Store step results
                 for idx, (student_step, evaluation) in enumerate(
-                    zip(student_steps, grading_result['evaluations']), start=1
+                    zip(steps_for_results, grading_result['evaluations']), start=1
                 ):
                     matched_gold = None
                     if evaluation.matched_gold_step is not None:
@@ -3745,6 +3748,7 @@ async def grade_submission(
 
             grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
             grading_result = grader.grade(student_steps)
+            steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
 
             # Store grading result
             db_grading_result = models.GradingResult(
@@ -3762,7 +3766,7 @@ async def grade_submission(
 
             # Store step results
             for idx, (student_step, evaluation) in enumerate(
-                zip(student_steps, grading_result['evaluations']), start=1
+                zip(steps_for_results, grading_result['evaluations']), start=1
             ):
                 matched_gold = None
                 if evaluation.matched_gold_step is not None:

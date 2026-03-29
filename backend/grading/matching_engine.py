@@ -117,6 +117,11 @@ class MatchingEngine:
             if syn_score >= 0.85:
                 return syn_score, "science_synonym_match"
 
+        # Strategy 2c: Short rubric line / key phrase appears inside a long PDF-style answer
+        score, strategy = self._long_answer_contains_rubric(student_text, gold_text)
+        if score >= 0.38:
+            return score, strategy
+
         # Strategy 3: ML-based semantic matching (trained on Rwanda dataset)
         if self.use_ml and self.ml_matcher:
             score, strategy = self.ml_matcher.match(student_text, gold_text, question_context)
@@ -145,6 +150,53 @@ class MatchingEngine:
         
         return score, strategy
     
+    def _long_answer_contains_rubric(self, student: str, gold: str) -> Tuple[float, str]:
+        """
+        When the student wrote a paragraph (e.g. from a typed PDF) and the rubric
+        is a short bullet, reward presence of the same ratios and key terms inside
+        the longer text. This path is conservative: requires several signals.
+        """
+        st = (student or "").strip()
+        gl = (gold or "").strip()
+        if len(st) < 40 or len(gl) < 5 or len(gl) > len(st):
+            return 0.0, ""
+
+        s_low = st.lower()
+        g_low = gl.lower()
+        s_compact = re.sub(r"\s+", "", s_low)
+
+        score_bits: list = []
+
+        ratios = re.findall(r"\d+\s*:\s*\d+(?:\s*:\s*\d+)?", g_low)
+        if ratios:
+            hits = 0
+            for r in ratios:
+                rc = re.sub(r"\s+", "", r)
+                if len(rc) >= 3 and rc in s_compact:
+                    hits += 1
+            score_bits.append(hits / len(ratios))
+
+        filler = frozenset(
+            "that this with from should student state show give your answer the and for are was were "
+            "has have will into each other than then them their there".split()
+        )
+        raw_words = re.findall(r"[a-z]{4,}", re.sub(r"<[^>]+>|\\[a-zA-Z]+|[{}$]", " ", g_low))
+        words = [w for w in raw_words if w not in filler]
+        if words:
+            uniq = list(dict.fromkeys(words))
+            present = sum(1 for w in uniq if w in s_low)
+            score_bits.append(present / len(uniq))
+
+        if not score_bits:
+            return 0.0, ""
+
+        base = sum(score_bits) / len(score_bits)
+        if base < 0.35:
+            return 0.0, ""
+
+        mapped = 0.40 + min(0.52, (base - 0.35) / 0.65 * 0.52)
+        return mapped, "long_answer_rubric_overlap"
+
     def _exact_match(self, text1: str, text2: str) -> Tuple[float, str]:
         """Check for exact text match"""
         if text1.strip() == text2.strip():

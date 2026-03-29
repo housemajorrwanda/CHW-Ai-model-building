@@ -307,6 +307,9 @@ export default function TakeExam() {
   );
   const hasSubQuestions = (currentQuestion?.subQuestions?.length ?? 0) > 0;
   const answeredCount = answers.filter(isQuestionAnswered).length;
+  const canSubmit = answers.some(isQuestionAnswered) || !!fullAnswerPdf;
+  const totalQuestions = exam.questions?.length || 0;
+  const isLastQuestion = totalQuestions === 0 || currentQuestionIndex >= totalQuestions - 1;
 
   return (
     <div className="flex gap-6 h-[calc(100vh-120px)]">
@@ -384,7 +387,7 @@ export default function TakeExam() {
                   <span className="font-mono">Q3</span> on new lines. Typed PDFs are read directly; scans use OCR.
                 </p>
                 {fullAnswerPdf ? (
-                  <div className="mt-2 flex items-center gap-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-sm flex-1 min-w-0">
                       <FileText className="h-4 w-4 text-primary shrink-0" />
                       <span className="truncate font-medium">{fullAnswerPdf.name}</span>
@@ -403,6 +406,13 @@ export default function TakeExam() {
                       }}
                     >
                       <X className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleSubmit}
+                      disabled={submitMutation.isPending}
+                    >
+                      {submitMutation.isPending ? 'Submitting…' : 'Submit exam now'}
                     </Button>
                   </div>
                 ) : (
@@ -693,7 +703,7 @@ export default function TakeExam() {
         </ScrollArea>
 
         {/* Navigation */}
-        <div className="flex justify-between items-center pt-2 border-t flex-shrink-0">
+        <div className="flex justify-between items-center pt-2 border-t flex-shrink-0 gap-2 flex-wrap">
           <Button
             variant="outline"
             onClick={() => setCurrentQuestionIndex(Math.max(0, currentQuestionIndex - 1))}
@@ -702,33 +712,55 @@ export default function TakeExam() {
             Previous
           </Button>
 
-          <div className="text-sm text-muted-foreground">
-            Question {currentQuestionIndex + 1} of {exam.questions?.length || 0}
+          <div className="text-sm text-muted-foreground order-last sm:order-none w-full sm:w-auto text-center sm:text-left">
+            Question {currentQuestionIndex + 1} of {totalQuestions}
           </div>
 
-          {currentQuestionIndex < (exam.questions?.length || 0) - 1 ? (
-            <Button onClick={() => setCurrentQuestionIndex(currentQuestionIndex + 1)}>
-              Next <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          ) : (
-            <Button
-              onClick={handleSubmit}
-              disabled={submitMutation.isPending}
-              className="min-w-[150px]"
-            >
-              {submitMutation.isPending ? (
-                <>
-                  <div className="h-4 w-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin mr-2" />
-                  Submitting…
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                  Submit Exam
-                </>
-              )}
-            </Button>
-          )}
+          <div className="flex gap-2 items-center">
+            {canSubmit && !isLastQuestion && (
+              <Button
+                onClick={handleSubmit}
+                disabled={submitMutation.isPending}
+                className="min-w-[130px]"
+                variant="secondary"
+              >
+                {submitMutation.isPending ? (
+                  <>
+                    <div className="h-4 w-4 border-2 border-secondary-foreground/30 border-t-secondary-foreground rounded-full animate-spin mr-2" />
+                    Submitting…
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    Submit exam
+                  </>
+                )}
+              </Button>
+            )}
+            {!isLastQuestion ? (
+              <Button onClick={() => setCurrentQuestionIndex(currentQuestionIndex + 1)}>
+                Next <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            ) : (
+              <Button
+                onClick={handleSubmit}
+                disabled={submitMutation.isPending || !canSubmit}
+                className="min-w-[150px]"
+              >
+                {submitMutation.isPending ? (
+                  <>
+                    <div className="h-4 w-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin mr-2" />
+                    Submitting…
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    Submit Exam
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>
