@@ -29,6 +29,16 @@ function resolveAttachmentSrc(filePath: string): string {
 
 const subPartLabel = (idx: number) => String.fromCharCode(97 + idx);
 
+/** Avoid "(a) (a) …" when the stem already includes the part label */
+function dedupeLeadingPartLabel(text: string, letter: string): string {
+  const t = text.trim();
+  if (!t) return text;
+  const esc = letter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const double = new RegExp(`^\\(\\s*${esc}\\s*\\)\\s*\\(\\s*${esc}\\s*\\)\\s*`, 'i');
+  if (double.test(t)) return t.replace(double, `(${letter}) `);
+  return text;
+}
+
 export function QuestionDisplay({
   questionNumber,
   questionText,
@@ -64,7 +74,7 @@ export function QuestionDisplay({
         {/* Images attached to this question */}
         {imageAttachments.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm font-semibold text-muted-foreground">Diagrams / Images</p>
+            <p className="text-sm font-medium text-muted-foreground">Figures</p>
             <div className="flex flex-wrap gap-4">
               {imageAttachments.map((att) => (
                 <img
@@ -90,7 +100,13 @@ export function QuestionDisplay({
                   ({subPartLabel(idx)})
                 </span>
                 <div className="flex-1 space-y-1">
-                  <RichContentViewer content={sub.richContent || sub.text} />
+                  <RichContentViewer
+                    content={
+                      typeof (sub.richContent || sub.text) === 'string'
+                        ? dedupeLeadingPartLabel(sub.richContent || sub.text, subPartLabel(idx))
+                        : sub.richContent || sub.text
+                    }
+                  />
                   <span className="text-xs text-muted-foreground">
                     [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
                   </span>

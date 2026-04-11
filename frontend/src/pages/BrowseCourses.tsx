@@ -10,6 +10,19 @@ import { BookOpen, GraduationCap, Search, CheckCircle2, Clock, XCircle, Loader2 
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
+function formatCourseTitle(name: string) {
+  return name
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function isPlaceholderDescription(d: string | undefined) {
+  const t = d?.trim() ?? '';
+  return !t || /^test$/i.test(t);
+}
+
 interface Course {
   id: string;
   name: string;
@@ -97,9 +110,9 @@ export default function BrowseCourses() {
         <CardHeader>
           <div className="flex items-start justify-between">
             <div className="space-y-1 flex-1">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <BookOpen className="h-5 w-5 text-primary" />
-                {course.name}
+              <CardTitle className="text-lg flex items-center gap-2 font-semibold leading-snug">
+                <BookOpen className="h-5 w-5 shrink-0 text-primary" />
+                <span className="line-clamp-2">{formatCourseTitle(course.name)}</span>
               </CardTitle>
               <CardDescription className="flex items-center gap-2">
                 <GraduationCap className="h-4 w-4" />
@@ -113,19 +126,18 @@ export default function BrowseCourses() {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            <p className="text-sm text-muted-foreground line-clamp-2">
-              {course.description || 'No description available'}
-            </p>
-            
-            <div className="flex items-center gap-4 text-sm">
-              <span className="text-muted-foreground">
-                <strong className="text-foreground">{course.code}</strong>
-              </span>
-              <span className="text-muted-foreground">
+            {!isPlaceholderDescription(course.description) && (
+              <p className="text-sm text-muted-foreground line-clamp-2">{course.description}</p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+              <span className="font-mono font-medium text-foreground">{course.code}</span>
+              <span>
                 {course.examCount} {course.examCount === 1 ? 'exam' : 'exams'}
               </span>
-              <span className="text-muted-foreground">
-                {course.enrolledStudents.length} students
+              <span>
+                {course.enrolledStudents.length}{' '}
+                {course.enrolledStudents.length === 1 ? 'student' : 'students'}
               </span>
             </div>
 
@@ -145,21 +157,22 @@ export default function BrowseCourses() {
             )}
           </div>
         </CardContent>
-        <CardFooter>
+        <CardFooter className="pt-2">
           {status === 'enrolled' && (
-            <Button variant="outline" className="w-full" disabled>
-              <CheckCircle2 className="mr-2 h-4 w-4 text-green-600" />
+            <Button variant="secondary" size="sm" className="w-full" disabled>
+              <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-600" />
               Enrolled
             </Button>
           )}
           {status === 'pending' && (
-            <Button variant="outline" className="w-full" disabled>
-              <Clock className="mr-2 h-4 w-4 text-yellow-600" />
-              Pending Approval
+            <Button variant="outline" size="sm" className="w-full" disabled>
+              <Clock className="mr-2 h-4 w-4 text-amber-600" />
+              Pending
             </Button>
           )}
           {status === null && (
             <Button
+              size="sm"
               className="w-full"
               onClick={() => handleEnroll(course.id)}
               disabled={isEnrolling}
@@ -167,10 +180,10 @@ export default function BrowseCourses() {
               {isEnrolling ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Enrolling...
+                  Sending…
                 </>
               ) : (
-                'Request Enrollment'
+                'Request access'
               )}
             </Button>
           )}
@@ -190,17 +203,15 @@ export default function BrowseCourses() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold mb-2">Browse Courses</h1>
-        <p className="text-muted-foreground">
-          Discover and enroll in courses to start your learning journey
-        </p>
+        <h1 className="text-3xl font-bold tracking-tight mb-1">Browse courses</h1>
+        <p className="text-sm text-muted-foreground">Search, then request access or view your enrollments</p>
       </div>
 
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Search courses by name, code, or professor..."
+          placeholder="Name, code, or instructor…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-10"
@@ -209,15 +220,15 @@ export default function BrowseCourses() {
 
       {/* Tabs */}
       <Tabs defaultValue="all" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="all">
-            All Courses ({filteredCourses.length})
+        <TabsList className="grid h-10 w-full max-w-lg grid-cols-3">
+          <TabsTrigger value="all" className="text-sm">
+            All ({filteredCourses.length})
           </TabsTrigger>
-          <TabsTrigger value="enrolled">
-            My Courses ({enrolledCourses.length})
+          <TabsTrigger value="enrolled" className="text-sm">
+            Mine ({enrolledCourses.length})
           </TabsTrigger>
-          <TabsTrigger value="available">
-            Available ({availableCourses.length})
+          <TabsTrigger value="available" className="text-sm">
+            Open ({availableCourses.length})
           </TabsTrigger>
         </TabsList>
 

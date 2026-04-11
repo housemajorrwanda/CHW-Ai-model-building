@@ -12,7 +12,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { FunctionSquare, AlignCenter, AlignLeft, Pencil, Info, ChevronDown, ChevronUp, PenLine, Keyboard } from 'lucide-react';
+import { FunctionSquare, AlignCenter, AlignLeft, Pencil, ChevronDown, ChevronUp, PenLine, Keyboard } from 'lucide-react';
 import { useLatexAutocomplete, LatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { cn } from '@/lib/utils';
 
@@ -289,10 +289,25 @@ export function FormulaInserter({
   const editOnly = controlledOpen !== undefined && onUpdate;
   const isEditing = Boolean(onUpdate && open && initialLatex !== undefined);
 
+  const previewPanel = (
+    <div className="space-y-1.5">
+      <span className="text-xs font-medium text-muted-foreground">Preview</span>
+      <div className="flex min-h-[48px] items-center justify-center rounded-lg border border-dashed border-muted-foreground/25 bg-muted/25 px-3 py-2">
+        {displayMode ? (
+          <FormulaRenderer latex={latex} displayMode={true} />
+        ) : (
+          <span className="text-sm text-muted-foreground">
+            Inline: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
   const dialogContent = (
-    <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="space-y-1">
-          <DialogTitle className="text-lg flex items-center gap-2">
+    <DialogContent className="max-h-[85vh] max-w-2xl gap-4 overflow-y-auto p-5 sm:p-6">
+        <DialogHeader className="space-y-0 pb-1">
+          <DialogTitle className="flex items-center gap-2 text-lg">
             {isEditing ? (
               <>
                 <Pencil className="h-5 w-5 text-primary" />
@@ -305,18 +320,9 @@ export function FormulaInserter({
               </>
             )}
           </DialogTitle>
-          {!editOnly && (
-            <p className="text-sm text-muted-foreground flex items-start gap-1.5 pt-0.5">
-              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <span>
-                Use the <strong>Visual editor</strong> (Word-style) or <strong>LaTeX</strong> tab — your choice is
-                remembered on this device. Click any equation in the document to edit it later.
-              </span>
-            </p>
-          )}
         </DialogHeader>
 
-        <div className="flex gap-2 p-1 bg-muted/50 rounded-lg w-fit">
+        <div className="flex gap-1 rounded-lg bg-muted/50 p-1 w-fit">
           <button
             type="button"
             onClick={() => setDisplayMode(false)}
@@ -342,35 +348,52 @@ export function FormulaInserter({
         </div>
 
         <Tabs defaultValue="write" className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="write" className="text-sm">Write</TabsTrigger>
-            <TabsTrigger value="common" className="text-sm">Templates</TabsTrigger>
+          <TabsList className="grid h-10 w-full max-w-xs grid-cols-2">
+            <TabsTrigger value="write" className="text-sm">
+              Write
+            </TabsTrigger>
+            <TabsTrigger value="common" className="text-sm">
+              Templates
+            </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="write" className="mt-3 space-y-3">
-            {/* Visual (Word-like) vs LaTeX — preference saved on this device */}
-            <Tabs
-              value={formulaInputMode}
-              onValueChange={(v) => persistFormulaInputMode(v === 'latex' ? 'latex' : 'visual')}
-              className="w-full"
-            >
-              <TabsList className="grid w-full grid-cols-2 h-auto p-1 gap-1">
-                <TabsTrigger value="visual" className="text-xs sm:text-sm gap-2 py-2">
+          <TabsContent value="write" className="mt-3 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex gap-1 rounded-lg bg-muted/50 p-1">
+                <button
+                  type="button"
+                  onClick={() => persistFormulaInputMode('visual')}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:text-sm',
+                    formulaInputMode === 'visual'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
                   <PenLine className="h-3.5 w-3.5 shrink-0" />
-                  Visual editor
-                </TabsTrigger>
-                <TabsTrigger value="latex" className="text-xs sm:text-sm gap-2 py-2">
+                  Visual
+                </button>
+                <button
+                  type="button"
+                  onClick={() => persistFormulaInputMode('latex')}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:text-sm',
+                    formulaInputMode === 'latex'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
                   <Keyboard className="h-3.5 w-3.5 shrink-0" />
-                  LaTeX (advanced)
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="visual" className="mt-3 space-y-3">
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  Build equations like in Microsoft Word: tap the box below, use the on-screen keyboard, or use the
-                  structure buttons under this section. No LaTeX knowledge needed. Pasting <strong>LaTeX</strong>{' '}
-                  (with backslashes, e.g. <code className="text-xs">\frac</code>) is detected and kept; rich text from
-                  Word or the web is usually plain characters only — use the LaTeX tab or type here for full control.
-                </p>
+                  LaTeX
+                </button>
+              </div>
+              <span className="text-[10px] text-muted-foreground" title="Visual vs LaTeX choice is remembered">
+                Saved in this browser
+              </span>
+            </div>
+
+            {formulaInputMode === 'visual' ? (
+              <div className="space-y-3">
                 <VisualMathField
                   ref={mathFieldRef}
                   value={latex}
@@ -380,36 +403,40 @@ export function FormulaInserter({
                   }}
                   className="w-full"
                 />
-                <div className="space-y-1.5">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    How it appears in the exam (KaTeX)
-                  </span>
-                  <div className="min-h-[56px] py-3 px-4 rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center">
-                    {displayMode ? (
-                      <FormulaRenderer latex={latex} displayMode={true} />
-                    ) : (
-                      <span className="text-sm text-muted-foreground">
-                        Sample: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
-                      </span>
-                    )}
-                  </div>
+                {previewPanel}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">LaTeX</label>
+                  <Textarea
+                    ref={latexAutocomplete.ref}
+                    placeholder={'e.g. x^2 + \\frac{1}{2}'}
+                    value={latex}
+                    onChange={handleChange}
+                    onSelect={handleSelect}
+                    rows={4}
+                    className="resize-none font-mono text-sm placeholder:text-muted-foreground/60 border-muted-foreground/20 focus-visible:ring-1"
+                    onKeyDown={(e) => {
+                      latexAutocomplete.onKeyDown(e);
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInsert();
+                    }}
+                  />
+                  {latexAutocomplete.showList && (
+                    <LatexCompletionsList
+                      completions={latexAutocomplete.completions}
+                      selectedIndex={latexAutocomplete.selectedIndex}
+                      onSelect={(snippet) => latexAutocomplete.apply(snippet)}
+                    />
+                  )}
                 </div>
-              </TabsContent>
-              <TabsContent value="latex" className="mt-3">
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  Type LaTeX commands directly. Use the buttons below to insert snippets, or switch back to the visual
-                  editor anytime.
-                </p>
-              </TabsContent>
-            </Tabs>
+                <p className="text-[11px] text-muted-foreground">Ctrl/⌘ + Enter to insert</p>
+                {previewPanel}
+              </div>
+            )}
 
-            <div className="space-y-3 pt-1 border-t">
-            <p className="text-xs text-muted-foreground">
-              Structures &amp; symbols — tap to insert into the{' '}
-              {formulaInputMode === 'visual'
-                ? 'visual editor (top).'
-                : 'LaTeX box (below), at your cursor.'}
-            </p>
+            <div className="space-y-3 border-t pt-3">
+            <p className="text-[11px] font-medium text-muted-foreground">Snippets · insert at cursor</p>
 
             {/* Structures first (basic + … more) */}
             <div className="space-y-1.5">
@@ -548,7 +575,7 @@ export function FormulaInserter({
 
             {/* Large operators (basic + … more) */}
             <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Large operators</span>
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Operators</span>
               <div className="flex flex-wrap gap-1 items-center">
                 {LARGE_OPS_BASIC.map((op) => (
                   <Button
@@ -643,7 +670,7 @@ export function FormulaInserter({
                     ))}
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    <span className="text-xs text-muted-foreground self-center mr-1">Relations:</span>
+                    <span className="mr-1 self-center text-[10px] text-muted-foreground">Rel.</span>
                     {MORE_SYMBOLS_ROW3.map((sym) => (
                       <button
                         key={sym}
@@ -660,49 +687,6 @@ export function FormulaInserter({
             </div>
 
             </div>
-
-            {formulaInputMode === 'latex' && (
-              <>
-                {/* LaTeX input */}
-                <div className="relative space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">LaTeX</label>
-                  <Textarea
-                    ref={latexAutocomplete.ref}
-                    placeholder="Type equation here (e.g. x^2 + \\frac{1}{2})"
-                    value={latex}
-                    onChange={handleChange}
-                    onSelect={handleSelect}
-                    rows={4}
-                    className="font-mono text-sm resize-none placeholder:text-muted-foreground/70 border-muted-foreground/20 focus-visible:ring-1"
-                    onKeyDown={(e) => {
-                      latexAutocomplete.onKeyDown(e);
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInsert();
-                    }}
-                  />
-                  {latexAutocomplete.showList && (
-                    <LatexCompletionsList
-                      completions={latexAutocomplete.completions}
-                      selectedIndex={latexAutocomplete.selectedIndex}
-                      onSelect={(snippet) => latexAutocomplete.apply(snippet)}
-                    />
-                  )}
-                </div>
-
-                {/* Live preview */}
-                <div className="space-y-1.5">
-                  <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Live preview</span>
-                  <div className="min-h-[56px] py-3 px-4 rounded-lg border-2 border-dashed border-muted-foreground/20 bg-muted/30 flex items-center justify-center">
-                    {displayMode ? (
-                      <FormulaRenderer latex={latex} displayMode={true} />
-                    ) : (
-                      <span className="text-sm text-muted-foreground">
-                        Sample: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
 
             {error && (
               <p className="text-sm text-destructive bg-destructive/10 px-2 py-1 rounded">{error}</p>

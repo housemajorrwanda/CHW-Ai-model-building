@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Courses from "./pages/Courses";
+import CourseDetail from "./pages/CourseDetail";
 import CreateCourse from "./pages/CreateCourse";
 import BrowseCourses from "./pages/BrowseCourses";
 import StudentExams from "./pages/StudentExams";
@@ -18,7 +19,11 @@ import SubmitExam from "./pages/SubmitExam";
 import TakeExam from "./pages/TakeExam";
 import MyResults from "./pages/MyResults";
 import NotFound from "./pages/NotFound";
-import MainLayout from "./components/layout/MainLayout";
+import { DashboardLayout } from "./components/layout/DashboardLayout";
+import Profile from "./pages/Profile";
+import Settings from "./pages/Settings";
+import { UserSettingsProvider } from "./contexts/UserSettingsContext";
+import { ThemeProvider } from "next-themes";
 import { Loader2 } from "lucide-react";
 
 const queryClient = new QueryClient();
@@ -42,7 +47,7 @@ function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode;
     return <Navigate to="/dashboard" replace />;
   }
   
-  return <MainLayout>{children}</MainLayout>;
+  return <DashboardLayout>{children}</DashboardLayout>;
 }
 
 function AppRoutes() {
@@ -63,10 +68,13 @@ function AppRoutes() {
       
       {/* Protected Routes */}
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
       
       {/* Professor Routes */}
       <Route path="/courses" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><Courses /></ProtectedRoute>} />
       <Route path="/courses/new" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><CreateCourse /></ProtectedRoute>} />
+      <Route path="/courses/:courseId" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><CourseDetail /></ProtectedRoute>} />
       <Route path="/exams" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><ProfessorExams /></ProtectedRoute>} />
       <Route path="/exams/new" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><CreateExam /></ProtectedRoute>} />
       <Route path="/exams/:id/edit" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><CreateExam /></ProtectedRoute>} />
@@ -89,13 +97,17 @@ function AppRoutes() {
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <AppRoutes />
-        </BrowserRouter>
-      </TooltipProvider>
+      <ThemeProvider attribute="class" defaultTheme="system" enableSystem storageKey="mathgrade-ui-theme">
+        <UserSettingsProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter>
+              <AppRoutes />
+            </BrowserRouter>
+          </TooltipProvider>
+        </UserSettingsProvider>
+      </ThemeProvider>
     </AuthProvider>
   </QueryClientProvider>
 );

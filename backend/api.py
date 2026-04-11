@@ -3,6 +3,7 @@ FastAPI backend for EasyGrade
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
@@ -68,6 +69,13 @@ logger.info(
     _cors_origin_regex or "(none)",
 )
 
+# Serve uploaded files (exam assets, profile photos, etc.)
+app.mount(
+    "/uploads",
+    StaticFiles(directory=str(UPLOAD_DIR.resolve())),
+    name="uploads",
+)
+
 # Initialize OCR processor
 ocr_processor = OCRProcessor(language="en", dpi=300, psm=6, use_easyocr=False)
 
@@ -75,11 +83,12 @@ ocr_processor = OCRProcessor(language="en", dpi=300, psm=6, use_easyocr=False)
 def _include_grading_in_submission_payload(submission: models.Submission, viewer: models.User) -> bool:
     """
     Whether API clients should receive per-question grading (scores, steps).
-    Students only get this once grading is in a published pipeline state.
-    Professors also get it on pending/grading when rows exist (e.g. after rejecting
-    autograde for manual review without wiping the student's work).
+    Students only receive scores/feedback after the instructor approves (published).
+    Professors see grading whenever it exists (graded, awaiting approval, or pending with rows).
     """
     st = submission.status
+    if viewer.role == models.UserRole.STUDENT:
+        return st == models.SubmissionStatus.APPROVED
     if st in (
         models.SubmissionStatus.GRADED,
         models.SubmissionStatus.APPROVED,
@@ -90,6 +99,15 @@ def _include_grading_in_submission_payload(submission: models.Submission, viewer
         if st in (models.SubmissionStatus.PENDING, models.SubmissionStatus.GRADING):
             return bool(submission.grading_results)
     return False
+
+
+def _submission_total_score_for_api(
+    submission: models.Submission, viewer: models.User, include_grading: bool
+):
+    """Hide total score from students until grades are approved and released."""
+    if viewer.role == models.UserRole.STUDENT and not include_grading:
+        return None
+    return submission.total_score
 
 
 def _step_result_max_score(evaluation: Any, gold_steps: List[GraderStep], step_number: int) -> int:
@@ -387,6 +405,13 @@ def get_current_user(
     return user
 
 
+def _optional_str(value) -> Optional[str]:
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
+
+
 def user_to_response(user: models.User) -> schemas.UserResponse:
     """Convert User model to UserResponse schema"""
     return schemas.UserResponse(
@@ -395,7 +420,14 @@ def user_to_response(user: models.User) -> schemas.UserResponse:
         email=user.email,
         role=user.role,
         avatar=user.avatar,
-        createdAt=user.created_at
+        createdAt=user.created_at,
+        institution=user.institution,
+        country=user.country,
+        majorDepartment=user.major_department,
+        yearOfStudy=user.year_of_study,
+        gender=user.gender,
+        studentId=user.student_id,
+        dateOfBirth=user.date_of_birth,
     )
 
 
@@ -476,10 +508,17 @@ def register(user_data: schemas.UserRegister, db: Session = Depends(get_db)):
     
     # Create new user
     new_user = models.User(
-        name=user_data.name,
-        email=user_data.email,
+        name=user_data.name.strip(),
+        email=str(user_data.email).strip().lower(),
         password_hash=get_password_hash(user_data.password),
-        role=user_data.role
+        role=user_data.role,
+        institution=_optional_str(user_data.institution),
+        country=_optional_str(user_data.country),
+        major_department=_optional_str(user_data.majorDepartment),
+        year_of_study=user_data.yearOfStudy,
+        gender=_optional_str(user_data.gender),
+        student_id=_optional_str(user_data.studentId),
+        date_of_birth=user_data.dateOfBirth,
     )
     db.add(new_user)
     db.commit()
@@ -500,6 +539,129 @@ def get_me(current_user: models.User = Depends(get_current_user)):
     """Get current user info"""
     return user_to_response(current_user)
 
+
+@app.put("/api/auth/me", response_model=schemas.UserResponse)
+def update_me(
+    body: schemas.UserProfileUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update profile (name, email, and/or password) for the signed-in user."""
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        current_user.name = name
+
+    if body.email is not None:
+        email_norm = str(body.email).strip().lower()
+        existing = db.query(models.User).filter(models.User.email == email_norm).first()
+        if existing and existing.id != current_user.id:
+            raise HTTPException(status_code=400, detail="Email already in use")
+        current_user.email = email_norm
+
+    if body.new_password:
+        if not body.current_password:
+            raise HTTPException(status_code=400, detail="Current password required to set a new password")
+        if not verify_password(body.current_password, current_user.password_hash):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        if len(body.new_password) < 8:
+            raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+        current_user.password_hash = get_password_hash(body.new_password)
+    elif body.current_password is not None and body.new_password is None:
+        raise HTTPException(status_code=400, detail="Provide new_password when sending current_password")
+
+    # Demographics: only update keys the client sent (supports clearing with null / "")
+    _prof = body.model_dump(exclude_unset=True)
+    if "institution" in _prof:
+        current_user.institution = _optional_str(_prof["institution"])
+    if "country" in _prof:
+        current_user.country = _optional_str(_prof["country"])
+    if "majorDepartment" in _prof:
+        current_user.major_department = _optional_str(_prof["majorDepartment"])
+    if "yearOfStudy" in _prof:
+        current_user.year_of_study = _prof["yearOfStudy"]
+    if "gender" in _prof:
+        current_user.gender = _optional_str(_prof["gender"])
+    if "studentId" in _prof:
+        current_user.student_id = _optional_str(_prof["studentId"])
+    if "dateOfBirth" in _prof:
+        current_user.date_of_birth = _prof["dateOfBirth"]
+
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return user_to_response(current_user)
+
+
+_AVATAR_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
+_AVATAR_ALLOWED_TYPES = frozenset(
+    {"image/jpeg", "image/png", "image/webp", "image/gif"}
+)
+
+
+@app.post("/api/auth/me/avatar", response_model=schemas.UserResponse)
+async def upload_my_avatar(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload a profile picture (JPEG, PNG, WebP, or GIF; max 2 MB)."""
+    ct = (file.content_type or "").split(";")[0].strip().lower()
+    if ct not in _AVATAR_ALLOWED_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a JPEG, PNG, WebP, or GIF image",
+        )
+    raw = await file.read()
+    if len(raw) > _AVATAR_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Image must be 2 MB or smaller")
+
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    ext = ext_map.get(ct, ".jpg")
+    av_dir = UPLOAD_DIR / "avatars"
+    av_dir.mkdir(parents=True, exist_ok=True)
+    for old in av_dir.glob(f"{current_user.id}.*"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    dest_name = f"{current_user.id}{ext}"
+    dest = av_dir / dest_name
+    with open(dest, "wb") as f:
+        f.write(raw)
+
+    rel = f"/uploads/avatars/{dest_name}"
+    current_user.avatar = rel[:500]
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return user_to_response(current_user)
+
+
+@app.delete("/api/auth/me/avatar", response_model=schemas.UserResponse)
+def delete_my_avatar(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Remove profile photo."""
+    av_dir = UPLOAD_DIR / "avatars"
+    if av_dir.is_dir():
+        for old in av_dir.glob(f"{current_user.id}.*"):
+            try:
+                old.unlink(missing_ok=True)
+            except OSError:
+                pass
+    current_user.avatar = None
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return user_to_response(current_user)
 
 
 def course_to_response(course: models.Course, db: Session) -> schemas.CourseResponse:
@@ -3244,7 +3406,7 @@ def get_submissions(
                 submittedAt=submission.submitted_at,
                 status=submission.status,
                 answers=answers,
-                totalScore=submission.total_score,
+                totalScore=_submission_total_score_for_api(submission, current_user, _show_grading),
                 maxScore=submission.max_score
             )
         )
@@ -3332,7 +3494,7 @@ def get_submission(
         submittedAt=submission.submitted_at,
         status=submission.status,
         answers=answers,
-        totalScore=submission.total_score,
+        totalScore=_submission_total_score_for_api(submission, current_user, _show_grading),
         maxScore=submission.max_score
     )
 
@@ -3401,16 +3563,16 @@ async def download_marked_submission_pdf(
     if include_reference_solutions and not allow_ref:
         include_reference_solutions = False
 
-    graded_status_values = {"graded", "awaiting_approval", "approved"}
     st_val = (
         submission.status.value
         if isinstance(submission.status, models.SubmissionStatus)
         else str(submission.status or "")
     )
-    if current_user.role == models.UserRole.STUDENT and st_val not in graded_status_values:
+    # Students only get the marked PDF after the instructor approves (published grades)
+    if current_user.role == models.UserRole.STUDENT and st_val != models.SubmissionStatus.APPROVED.value:
         raise HTTPException(
             status_code=403,
-            detail="Marked PDF is available after grading is complete.",
+            detail="Marked PDF is available after your instructor approves and publishes your grade.",
         )
 
     by_qid = {gr.question_id: gr for gr in submission.grading_results}

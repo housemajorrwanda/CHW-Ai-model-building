@@ -1,7 +1,7 @@
 """
 SQLAlchemy database models
 """
-from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, Date, ForeignKey, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -50,6 +50,15 @@ class User(Base):
     role = Column(Enum(UserRole), nullable=False)
     avatar = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Profile / demographics (optional; collected at registration or later)
+    institution = Column(String(255), nullable=True)
+    country = Column(String(128), nullable=True)
+    major_department = Column(String(255), nullable=True)
+    year_of_study = Column(Integer, nullable=True)
+    gender = Column(String(64), nullable=True)
+    student_id = Column(String(128), nullable=True)
+    date_of_birth = Column(Date, nullable=True)
     
     # Relationships
     courses_taught = relationship("Course", back_populates="professor", foreign_keys="Course.professor_id")

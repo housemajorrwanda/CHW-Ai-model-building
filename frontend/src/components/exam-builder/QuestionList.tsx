@@ -128,14 +128,14 @@ export function QuestionList({
   };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-3 border-b bg-muted/20">
-        <h3 className="text-sm font-semibold">Question Outline</h3>
+    <div className="flex h-full flex-col">
+      <div className="border-b border-stone-200/70 bg-white/60 px-3 py-2.5 dark:border-stone-800 dark:bg-stone-950/40">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Outline</h3>
       </div>
       <div className="flex-1 overflow-y-auto">
         {questions.length === 0 ? (
-          <div className="p-4 text-center text-sm text-muted-foreground">
-            No questions yet
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            No questions yet—use <span className="font-medium text-foreground">Add question</span> above
           </div>
         ) : (
           questions.map((q) => renderQuestion(q, 0))

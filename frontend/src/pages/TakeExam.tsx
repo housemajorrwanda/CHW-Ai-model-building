@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -6,12 +6,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AnswerEditor } from '@/components/exam-taker/AnswerEditor';
 import { QuestionDisplay } from '@/components/exam-taker/QuestionDisplay';
-import { Upload, X, CheckCircle2, FileText, AlertCircle, ChevronRight, FileUp } from 'lucide-react';
+import { Upload, X, CheckCircle2, FileText, AlertCircle, ChevronRight, FileUp, Eye, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { examsAPI, submissionsAPI, type AnswerPdfPreviewResponse } from '@/lib/api';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +70,12 @@ interface TakeExamPayload {
 
 const subLabel = (idx: number) => String.fromCharCode(97 + idx); // a, b, c, …
 
+function questionPointsDisplay(q: { points?: number; subQuestions?: { points?: number }[] }): number {
+  const subs = q.subQuestions ?? [];
+  if (subs.length > 0) return subs.reduce((s, sq) => s + (sq.points || 0), 0);
+  return q.points ?? 0;
+}
+
 function isQuestionAnswered(ans: Answer | undefined): boolean {
   if (!ans) return false;
   if (ans.images.length > 0) return true;
@@ -88,6 +101,19 @@ export default function TakeExam() {
   const [pdfPreview, setPdfPreview] = useState<AnswerPdfPreviewResponse | null>(null);
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
   const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
+  const fullPdfInputRef = useRef<HTMLInputElement>(null);
+  const [fullPdfViewerOpen, setFullPdfViewerOpen] = useState(false);
+
+  const fullAnswerPdfObjectUrl = useMemo(() => {
+    if (!fullAnswerPdf) return null;
+    return URL.createObjectURL(fullAnswerPdf);
+  }, [fullAnswerPdf]);
+
+  useEffect(() => {
+    return () => {
+      if (fullAnswerPdfObjectUrl) URL.revokeObjectURL(fullAnswerPdfObjectUrl);
+    };
+  }, [fullAnswerPdfObjectUrl]);
 
   // ── Exam query ─────────────────────────────────────────────────────────
 
@@ -229,7 +255,10 @@ export default function TakeExam() {
     if (file && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))) {
       setFullAnswerPdf(file);
     }
+    e.target.value = '';
   };
+
+  const triggerFullPdfPicker = () => fullPdfInputRef.current?.click();
 
   const removeImage = (questionId: string, imgIdx: number) => {
     setAnswers(prev => prev.map(a =>
@@ -312,6 +341,7 @@ export default function TakeExam() {
   const isLastQuestion = totalQuestions === 0 || currentQuestionIndex >= totalQuestions - 1;
 
   return (
+    <>
     <div className="flex gap-6 h-[calc(100vh-120px)]">
       {/* ── Sidebar: question navigation ─────────────────────────────── */}
       <div className="w-64 flex-shrink-0">
@@ -342,7 +372,7 @@ export default function TakeExam() {
                       <span>Question {qNum}</span>
                       <div className="flex items-center gap-1">
                         {answered && <CheckCircle2 className="h-3 w-3" />}
-                        <span className="text-xs">{question.points}pts</span>
+                        <span className="text-xs tabular-nums">{questionPointsDisplay(question)}pts</span>
                       </div>
                     </Button>
                   );
@@ -364,7 +394,7 @@ export default function TakeExam() {
                 {exam.description && <CardDescription className="mt-2">{exam.description}</CardDescription>}
               </div>
               <div className="text-right">
-                <div className="text-sm text-muted-foreground">Total Marks</div>
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total</div>
                 <div className="text-2xl font-bold">
                   {exam.totalPoints || exam.questions?.reduce((s: number, q: any) => s + (q.points || 0), 0) || 0}
                 </div>
@@ -374,64 +404,88 @@ export default function TakeExam() {
         </Card>
 
         {/* ── Full-exam Answer PDF upload ─────────────────────────────── */}
-        <Card className="flex-shrink-0 border-primary/30 bg-primary/5">
+        <Card className="flex-shrink-0 border-violet-200/60 bg-violet-50/40 dark:border-violet-900/40 dark:bg-violet-950/20">
           <CardContent className="p-4">
-            <div className="flex items-start gap-4">
-              <FileUp className="h-8 w-8 text-primary shrink-0 mt-0.5" />
+            <div className="flex items-start gap-3">
+              <FileUp className="h-7 w-7 shrink-0 text-violet-600 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm">Upload Full Answer Sheet (PDF)</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Have all your answers in one document? Upload here (not under a single question). Use one PDF page per main question
-                  (page&nbsp;1&nbsp;=&nbsp;Q1, page&nbsp;2&nbsp;=&nbsp;Q2, …), or a single page with clear headings such as{' '}
-                  <span className="font-mono">1.</span>, <span className="font-mono">Question 2</span>, or{' '}
-                  <span className="font-mono">Q3</span> on new lines. Typed PDFs are read directly; scans use OCR.
+                <p className="font-semibold text-sm">Answer PDF (optional)</p>
+                <p className="text-xs text-muted-foreground mt-1 leading-snug">
+                  One file for the whole exam — not per question. Label pages or sections clearly{' '}
+                  <span className="font-mono text-[11px]">(Q1, Q2…)</span>. Typed text is read as-is; scans use OCR.
                 </p>
+                <input
+                  ref={fullPdfInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  className="hidden"
+                  onChange={handleFullPdfInput}
+                />
                 {fullAnswerPdf ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-sm flex-1 min-w-0">
-                      <FileText className="h-4 w-4 text-primary shrink-0" />
-                      <span className="truncate font-medium">{fullAnswerPdf.name}</span>
-                      <span className="text-xs text-muted-foreground shrink-0">
-                        ({(fullAnswerPdf.size / 1024).toFixed(0)} KB)
-                      </span>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-primary/20 bg-primary/10 px-3 py-2 text-sm">
+                        <FileText className="h-4 w-4 shrink-0 text-primary" />
+                        <span className="truncate font-medium">{fullAnswerPdf.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          ({(fullAnswerPdf.size / 1024).toFixed(0)} KB)
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="border-violet-300 font-medium"
+                          onClick={() => setFullPdfViewerOpen(true)}
+                        >
+                          <Eye className="mr-1.5 h-4 w-4" />
+                          Preview
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="font-medium"
+                          onClick={triggerFullPdfPicker}
+                        >
+                          <RefreshCw className="mr-1.5 h-4 w-4" />
+                          Replace PDF
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => {
+                            setFullAnswerPdf(null);
+                            setPdfPreview(null);
+                            setPdfPreviewError(null);
+                          }}
+                        >
+                          <X className="mr-1 h-4 w-4" />
+                          Remove
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleSubmit}
+                          disabled={submitMutation.isPending}
+                        >
+                          {submitMutation.isPending ? 'Submitting…' : 'Submit exam now'}
+                        </Button>
+                      </div>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => {
-                        setFullAnswerPdf(null);
-                        setPdfPreview(null);
-                        setPdfPreviewError(null);
-                      }}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={handleSubmit}
-                      disabled={submitMutation.isPending}
-                    >
-                      {submitMutation.isPending ? 'Submitting…' : 'Submit exam now'}
-                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Preview in browser · <strong>Replace</strong> before submit if needed
+                    </p>
                   </div>
                 ) : (
                   <div className="mt-2">
-                    <input
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      id="full-answer-pdf"
-                      className="hidden"
-                      onChange={handleFullPdfInput}
-                    />
-                    <label htmlFor="full-answer-pdf">
-                      <Button size="sm" variant="outline" className="cursor-pointer" asChild>
-                        <span>
-                          <Upload className="h-3.5 w-3.5 mr-1.5" />
-                          Choose PDF
-                        </span>
-                      </Button>
-                    </label>
+                    <Button type="button" size="sm" variant="outline" className="cursor-pointer" onClick={triggerFullPdfPicker}>
+                      <Upload className="mr-1.5 h-3.5 w-3.5" />
+                      Choose PDF
+                    </Button>
                   </div>
                 )}
 
@@ -525,7 +579,7 @@ export default function TakeExam() {
               <QuestionDisplay
                 questionNumber={currentQuestionNumber}
                 questionText={currentQuestion.richContent || currentQuestion.text}
-                questionPoints={currentQuestion.points || 0}
+                questionPoints={questionPointsDisplay(currentQuestion)}
                 attachments={currentQuestion.attachments}
                 subQuestions={(currentQuestion.subQuestions ?? []).map((sq, si) => ({
                   id: sq.id,
@@ -764,5 +818,61 @@ export default function TakeExam() {
         </div>
       </div>
     </div>
+
+    <Dialog open={fullPdfViewerOpen} onOpenChange={setFullPdfViewerOpen}>
+      <DialogContent className="flex max-h-[90vh] w-[min(100vw-1rem,56rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh]">
+        <DialogHeader className="shrink-0 space-y-1 border-b px-6 py-4 text-left">
+          <DialogTitle className="truncate pr-8 text-lg">
+            {fullAnswerPdf?.name ?? 'Answer sheet preview'}
+          </DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Check every page before submitting. Use Replace PDF if you need to upload a new file.
+          </p>
+        </DialogHeader>
+        {fullAnswerPdfObjectUrl ? (
+          <iframe
+            title="Uploaded answer PDF preview"
+            src={`${fullAnswerPdfObjectUrl}#toolbar=1`}
+            className="min-h-[60vh] w-full flex-1 border-0 bg-muted/40 dark:bg-muted/20"
+          />
+        ) : (
+          <div className="flex min-h-[40vh] items-center justify-center text-muted-foreground">
+            No file loaded
+          </div>
+        )}
+        <DialogFooter className="shrink-0 flex-col gap-2 border-t bg-muted/20 px-4 py-4 sm:flex-row sm:justify-between sm:px-6">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full sm:w-auto"
+            onClick={() => {
+              if (fullAnswerPdfObjectUrl) {
+                window.open(fullAnswerPdfObjectUrl, '_blank', 'noopener,noreferrer');
+              }
+            }}
+          >
+            Open in new tab
+          </Button>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => {
+                setFullPdfViewerOpen(false);
+                triggerFullPdfPicker();
+              }}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Replace PDF
+            </Button>
+            <Button type="button" className="w-full sm:w-auto" onClick={() => setFullPdfViewerOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

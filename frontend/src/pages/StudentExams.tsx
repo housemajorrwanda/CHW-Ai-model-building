@@ -68,11 +68,15 @@ export default function StudentExams() {
       return { status: 'available', label: 'Available', color: 'default' };
     }
 
-    if (submission.status === 'graded' || submission.status === 'approved') {
+    if (submission.status === 'approved') {
       return { status: 'graded', label: 'Graded', color: 'default', submission };
     }
-    if (submission.status === 'grading' || submission.status === 'awaiting_approval') {
-      return { status: 'grading', label: 'Grading', color: 'secondary', submission };
+    if (
+      submission.status === 'graded' ||
+      submission.status === 'awaiting_approval' ||
+      submission.status === 'grading'
+    ) {
+      return { status: 'grading', label: 'Under review', color: 'secondary', submission };
     }
     return { status: 'pending', label: 'Submitted', color: 'secondary', submission };
   };
@@ -137,17 +141,19 @@ export default function StudentExams() {
                 </span>
               </div>
             )}
-            {examStatus.submission && examStatus.status === 'graded' && (
-              <div className="flex items-center gap-2 mt-3 p-3 bg-primary/10 rounded-lg">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-                <span className="font-medium">
-                  Score: {examStatus.submission.totalScore?.toFixed(1)} / {examStatus.submission.maxScore}
-                  <span className="text-muted-foreground ml-2">
-                    ({((examStatus.submission.totalScore! / examStatus.submission.maxScore) * 100).toFixed(1)}%)
+            {examStatus.submission &&
+              examStatus.status === 'graded' &&
+              examStatus.submission.totalScore != null && (
+                <div className="flex items-center gap-2 mt-3 p-3 bg-primary/10 rounded-lg">
+                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                  <span className="font-medium">
+                    Score: {examStatus.submission.totalScore?.toFixed(1)} / {examStatus.submission.maxScore}
+                    <span className="text-muted-foreground ml-2">
+                      ({((examStatus.submission.totalScore! / examStatus.submission.maxScore) * 100).toFixed(1)}%)
+                    </span>
                   </span>
-                </span>
-              </div>
-            )}
+                </div>
+              )}
           </div>
         </CardContent>
         <CardFooter>
@@ -185,7 +191,7 @@ export default function StudentExams() {
               onClick={() => navigate(`/submissions/${examStatus.submission!.id}`)}
             >
               <CheckCircle2 className="mr-2 h-4 w-4" />
-              View Results
+              View published results
             </Button>
           )}
         </CardFooter>

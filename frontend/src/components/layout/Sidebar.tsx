@@ -5,21 +5,25 @@ import {
   LayoutDashboard,
   BookOpen,
   FileText,
-  Upload,
   Users,
-  Settings,
   LogOut,
   GraduationCap,
   BarChart3,
   ClipboardList,
+  User,
+  Settings,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { resolveAvatarUrl } from '@/lib/avatar';
 
 const professorLinks = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/courses', icon: BookOpen, label: 'Courses' },
   { to: '/exams', icon: FileText, label: 'Exams' },
   { to: '/submissions', icon: ClipboardList, label: 'Submissions' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/profile', icon: User, label: 'Profile' },
 ];
 
 const studentLinks = [
@@ -27,6 +31,8 @@ const studentLinks = [
   { to: '/browse-courses', icon: BookOpen, label: 'Browse Courses' },
   { to: '/my-exams', icon: FileText, label: 'My Exams' },
   { to: '/my-results', icon: BarChart3, label: 'My Results' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/profile', icon: User, label: 'Profile' },
 ];
 
 const adminLinks = [
@@ -34,6 +40,8 @@ const adminLinks = [
   { to: '/users', icon: Users, label: 'Users' },
   { to: '/all-courses', icon: BookOpen, label: 'All Courses' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/profile', icon: User, label: 'Profile' },
 ];
 
 export function Sidebar() {
@@ -55,28 +63,40 @@ export function Sidebar() {
             <GraduationCap className="h-5 w-5 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="text-base font-semibold text-sidebar-foreground">EasyGrade</h1>
-            <p className="text-xs text-sidebar-foreground/60">Exam Grading</p>
+            <h1 className="text-base font-semibold text-sidebar-foreground">MathGrade</h1>
+            <p className="text-xs text-sidebar-foreground/60">Exam grading</p>
           </div>
         </div>
 
-        {/* User Info */}
-        <div className="border-b border-sidebar-border p-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sidebar-accent text-sidebar-accent-foreground font-medium">
-              {user?.name?.charAt(0) || 'U'}
+        {/* User — opens profile */}
+        <div className="border-b border-sidebar-border p-3">
+          <Link
+            to="/profile"
+            className="flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-sidebar-accent/50"
+          >
+            <Avatar className="h-10 w-10 shrink-0 border border-sidebar-border">
+              <AvatarImage
+                src={resolveAvatarUrl(user?.avatar)}
+                alt=""
+                className="object-cover"
+              />
+              <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground text-sm font-medium">
+                {user?.name?.charAt(0) || 'U'}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-sidebar-foreground">{user?.name}</p>
+              <p className="text-xs capitalize text-sidebar-foreground/60">{user?.role}</p>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sidebar-foreground truncate">{user?.name}</p>
-              <p className="text-xs text-sidebar-foreground/60 capitalize">{user?.role}</p>
-            </div>
-          </div>
+          </Link>
         </div>
 
         {/* Navigation */}
         <nav className="flex-1 space-y-1 p-3">
           {links.map((link) => {
-            const isActive = location.pathname === link.to;
+            const isActive =
+              location.pathname === link.to ||
+              (link.to !== '/dashboard' && location.pathname.startsWith(`${link.to}/`));
             return (
               <Link
                 key={link.to}
@@ -97,13 +117,6 @@ export function Sidebar() {
 
         {/* Bottom Actions */}
         <div className="border-t border-sidebar-border p-3 space-y-1">
-          <Link
-            to="/settings"
-            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-all duration-200"
-          >
-            <Settings className="h-4 w-4" />
-            Settings
-          </Link>
           <Button
             variant="ghost"
             onClick={logout}

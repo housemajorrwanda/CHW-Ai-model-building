@@ -58,6 +58,14 @@ export interface RegisterRequest {
   email: string;
   password: string;
   role: string;
+  institution?: string;
+  country?: string;
+  majorDepartment?: string;
+  yearOfStudy?: number;
+  gender?: string;
+  studentId?: string;
+  /** YYYY-MM-DD */
+  dateOfBirth?: string;
 }
 
 export const authAPI = {
@@ -77,6 +85,46 @@ export const authAPI = {
 
   async getMe() {
     return apiCall('/auth/me');
+  },
+
+  async uploadAvatar(file: File) {
+    const token = getAuthToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${API_BASE_URL}/auth/me/avatar`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Upload failed' }));
+      const d = err.detail;
+      throw new Error(typeof d === 'string' ? d : 'Upload failed');
+    }
+    return response.json();
+  },
+
+  async deleteAvatar() {
+    return apiCall('/auth/me/avatar', { method: 'DELETE' });
+  },
+
+  async updateMe(body: {
+    name?: string;
+    email?: string;
+    current_password?: string;
+    new_password?: string;
+    institution?: string;
+    country?: string;
+    majorDepartment?: string;
+    yearOfStudy?: number | null;
+    gender?: string;
+    studentId?: string;
+    dateOfBirth?: string | null;
+  }) {
+    return apiCall('/auth/me', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
   },
 };
 
@@ -184,7 +232,7 @@ export const examsAPI = {
   },
 
   async getById(examId: string) {
-    return apiCall(`/exams/${examId}`);
+    return apiCall<ExamDetail>(`/exams/${examId}`);
   },
 
   async create(examData: any) {
@@ -294,6 +342,61 @@ export interface AnswerPdfPreviewResponse {
 }
 
 // ============================================================================
+// Submission / exam detail (GET by id — used by SubmissionDetail and flows)
+// ============================================================================
+
+/** Step-level result returned with a question’s grading breakdown */
+export interface GradingStepResult {
+  id: string;
+  score?: number;
+  feedback?: string;
+}
+
+export interface GradingResult {
+  id?: string;
+  score?: number;
+  maxScore?: number;
+  feedback?: string;
+  stepResults?: GradingStepResult[];
+  isCorrect?: boolean;
+}
+
+export interface SubmissionAnswer {
+  questionId: string;
+  questionNumber: number;
+  gradingResult?: GradingResult;
+  gradingResultId?: string;
+  extractedText?: string;
+  extractedLatex?: string;
+}
+
+export interface SubmissionDetail {
+  id?: string;
+  examId: string;
+  status: string;
+  studentName?: string;
+  submittedAt: string;
+  answers?: SubmissionAnswer[];
+  totalScore?: number | null;
+  maxScore: number;
+}
+
+export interface ExamQuestion {
+  id: string;
+  text?: string;
+  goldSolution?: { steps?: unknown[] };
+  goldSolutionSteps?: unknown;
+  finalAnswer?: string;
+  finalAnswerLatex?: string;
+}
+
+export interface ExamDetail {
+  id?: string;
+  title: string;
+  questions?: ExamQuestion[];
+}
+
+// ============================================================================
 // Submissions API
 // ============================================================================
 
@@ -310,7 +413,7 @@ export const submissionsAPI = {
   },
 
   async getById(submissionId: string) {
-    return apiCall(`/submissions/${submissionId}`);
+    return apiCall<SubmissionDetail>(`/submissions/${submissionId}`);
   },
 
   async submit(

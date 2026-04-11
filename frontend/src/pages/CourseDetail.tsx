@@ -1,6 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { api } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,6 +22,7 @@ import {
 import { toast } from 'sonner';
 import { Separator } from '@/components/ui/separator';
 import { Link } from 'react-router-dom';
+import { format } from 'date-fns';
 
 function CourseExamsList({ courseId }: { courseId: string }) {
   const { data: exams, isLoading } = useQuery({
@@ -80,9 +80,9 @@ function CourseExamsList({ courseId }: { courseId: string }) {
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" asChild>
-              <Link to={`/exams/${exam.id}`}>
+              <Link to={`/submissions?exam=${exam.id}`}>
                 <Eye className="h-4 w-4 mr-2" />
-                View
+                Submissions
               </Link>
             </Button>
             <Button variant="outline" size="sm" asChild>
@@ -151,22 +151,18 @@ export default function CourseDetail() {
 
   if (isLoading) {
     return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center h-64">
-          <p>Loading course...</p>
-        </div>
-      </DashboardLayout>
+      <div className="flex items-center justify-center h-64">
+        <p>Loading course...</p>
+      </div>
     );
   }
 
   if (!course) {
     return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center h-64">
-          <p className="text-muted-foreground mb-4">Course not found</p>
-          <Button onClick={() => navigate('/courses')}>Back to Courses</Button>
-        </div>
-      </DashboardLayout>
+      <div className="flex flex-col items-center justify-center h-64">
+        <p className="text-muted-foreground mb-4">Course not found</p>
+        <Button onClick={() => navigate('/courses')}>Back to Courses</Button>
+      </div>
     );
   }
 
@@ -178,7 +174,6 @@ export default function CourseDetail() {
   };
 
   return (
-    <DashboardLayout>
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex items-start justify-between">
@@ -492,7 +487,6 @@ export default function CourseDetail() {
           </TabsContent>
         </Tabs>
       </div>
-    </DashboardLayout>
   );
 }
 

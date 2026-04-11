@@ -15,42 +15,44 @@ interface StatsCardProps {
 
 export function StatsCard({ title, value, subtitle, icon: Icon, trend, variant = 'default' }: StatsCardProps) {
   const variants = {
-    default: 'bg-card',
-    primary: 'bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20',
-    accent: 'bg-gradient-to-br from-accent/10 to-accent/5 border-accent/20',
-    warning: 'bg-gradient-to-br from-warning/10 to-warning/5 border-warning/20',
+    default:
+      'border-slate-200/90 bg-gradient-to-br from-slate-50/90 to-card dark:from-slate-950/40 dark:border-slate-800',
+    primary:
+      'border-violet-200/90 bg-gradient-to-br from-violet-50/95 to-violet-100/20 dark:from-violet-950/50 dark:border-violet-900/60',
+    accent:
+      'border-emerald-200/90 bg-gradient-to-br from-emerald-50/95 to-teal-50/30 dark:from-emerald-950/40 dark:border-emerald-900/50',
+    warning:
+      'border-amber-200/90 bg-gradient-to-br from-amber-50/95 to-orange-50/20 dark:from-amber-950/30 dark:border-amber-900/50',
   };
 
   const iconVariants = {
-    default: 'bg-muted text-muted-foreground',
-    primary: 'bg-primary/20 text-primary',
-    accent: 'bg-accent/20 text-accent',
-    warning: 'bg-warning/20 text-warning',
+    default: 'bg-slate-200/80 text-slate-700 dark:bg-slate-800 dark:text-slate-200',
+    primary: 'bg-violet-600 text-white shadow-md shadow-violet-500/25',
+    accent: 'bg-emerald-600 text-white shadow-md shadow-emerald-500/25',
+    warning: 'bg-amber-500 text-white shadow-md shadow-amber-500/25',
   };
 
   return (
-    <div className={cn(
-      'rounded-xl border p-6 transition-all duration-300 hover:shadow-lg animate-fade-up',
-      variants[variant]
-    )}>
-      <div className="flex items-start justify-between">
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          <p className="text-3xl font-bold tracking-tight">{value}</p>
-          {subtitle && (
-            <p className="text-sm text-muted-foreground">{subtitle}</p>
-          )}
+    <div
+      className={cn(
+        'rounded-2xl border-2 p-5 shadow-sm transition-all duration-300 hover:shadow-md md:p-6 animate-fade-up',
+        variants[variant]
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground md:text-sm">{title}</p>
+          <p className="text-3xl font-bold tabular-nums tracking-tight md:text-4xl">{value}</p>
+          {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
           {trend && (
-            <p className={cn(
-              'text-sm font-medium',
-              trend.isPositive ? 'text-success' : 'text-destructive'
-            )}>
-              {trend.isPositive ? '+' : ''}{trend.value}% from last week
+            <p className={cn('text-sm font-medium', trend.isPositive ? 'text-emerald-600' : 'text-destructive')}>
+              {trend.isPositive ? '+' : ''}
+              {trend.value}% from last week
             </p>
           )}
         </div>
-        <div className={cn('rounded-lg p-3', iconVariants[variant])}>
-          <Icon className="h-5 w-5" />
+        <div className={cn('shrink-0 rounded-xl p-3.5', iconVariants[variant])}>
+          <Icon className="h-5 w-5 md:h-6 md:w-6" />
         </div>
       </div>
     </div>

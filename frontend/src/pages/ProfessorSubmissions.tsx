@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, AlertCircle, Filter, X, Edit2, ThumbsDown } from 'lucide-react';
+import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, Filter, ThumbsDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import {
@@ -125,9 +125,9 @@ export default function ProfessorSubmissions() {
   };
 
   const STATUS_LABEL: Record<string, string> = {
-    approved:          'Approved',
-    graded:            'Auto-graded',
-    awaiting_approval: 'Awaiting Approval',
+    approved:          'Released',
+    graded:            'Graded',
+    awaiting_approval: 'Needs review',
     grading:           'Grading…',
     pending:           'Pending',
   };
@@ -166,107 +166,96 @@ export default function ProfessorSubmissions() {
 
   return (
     <>
-      <div className="space-y-6">
+      <div className="mx-auto max-w-7xl space-y-6">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Student Submissions</h1>
-          <p className="text-muted-foreground">
-            Review and grade student submissions
-          </p>
+          <h1 className="text-3xl font-bold tracking-tight">Submissions</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Open a row to review or adjust grades</p>
         </div>
 
         {/* Stats */}
-        <div className="grid gap-4 md:grid-cols-5">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total</CardTitle>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <Card className="border-border/80 shadow-sm">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{filteredSubmissions.length}</div>
+            <CardContent className="pb-4">
+              <div className="text-2xl font-bold tabular-nums">{filteredSubmissions.length}</div>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Pending</CardTitle>
+          <Card className="border-border/80 shadow-sm">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Pending</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-yellow-600">{pendingCount}</div>
+            <CardContent className="pb-4">
+              <div className="text-2xl font-bold tabular-nums text-yellow-600">{pendingCount}</div>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Auto-graded</CardTitle>
+          <Card className="border-border/80 shadow-sm">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Graded</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-blue-600">{gradedCount}</div>
+            <CardContent className="pb-4">
+              <div className="text-2xl font-bold tabular-nums text-blue-600">{gradedCount}</div>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Awaiting Approval</CardTitle>
+          <Card className="border-border/80 shadow-sm">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Review</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-amber-600">{awaitingCount}</div>
+            <CardContent className="pb-4">
+              <div className="text-2xl font-bold tabular-nums text-amber-600">{awaitingCount}</div>
             </CardContent>
           </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Approved</CardTitle>
+          <Card className="border-border/80 shadow-sm">
+            <CardHeader className="pb-2 pt-4">
+              <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Released</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-emerald-600">{approvedCount}</div>
+            <CardContent className="pb-4">
+              <div className="text-2xl font-bold tabular-nums text-emerald-600">{approvedCount}</div>
             </CardContent>
           </Card>
         </div>
 
         {/* Filters */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Filter className="h-5 w-5 text-muted-foreground" />
-              <CardTitle className="text-base">Filters</CardTitle>
-            </div>
-          </CardHeader>
-          <CardContent className="flex gap-4">
-            <div className="flex-1">
-              <Select value={selectedExam} onValueChange={setSelectedExam}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Filter by exam" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Exams</SelectItem>
-                  {exams.map(exam => (
-                    <SelectItem key={exam.id} value={exam.id}>
-                      {exam.title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex-1">
-              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Filter by status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="grading">Grading</SelectItem>
-                  <SelectItem value="graded">Auto-graded</SelectItem>
-                  <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
-                  <SelectItem value="approved">Approved</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-card/50 p-4 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2 text-muted-foreground shrink-0">
+            <Filter className="h-4 w-4" />
+            <span className="text-sm font-medium">Filter</span>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row">
+            <Select value={selectedExam} onValueChange={setSelectedExam}>
+              <SelectTrigger className="bg-background">
+                <SelectValue placeholder="Exam" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All exams</SelectItem>
+                {exams.map((exam) => (
+                  <SelectItem key={exam.id} value={exam.id}>
+                    {exam.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+              <SelectTrigger className="bg-background">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="grading">Grading</SelectItem>
+                <SelectItem value="graded">Graded (auto)</SelectItem>
+                <SelectItem value="awaiting_approval">Awaiting your review</SelectItem>
+                <SelectItem value="approved">Released</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
 
         {/* Submissions Table */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Submissions</CardTitle>
-            <CardDescription>
-              Click on a submission to view details or run automatic grading
-            </CardDescription>
+        <Card className="border-border/80 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">List</CardTitle>
           </CardHeader>
           <CardContent>
             {filteredSubmissions.length === 0 ? (
@@ -322,76 +311,67 @@ export default function ProfessorSubmissions() {
                         </TableCell>
                         <TableCell>
                           {submission.totalScore !== null && submission.totalScore !== undefined ? (
-                            <span className="font-medium">
-                              {submission.totalScore.toFixed(1)} / {submission.maxScore}
-                              <span className="text-xs text-muted-foreground ml-1">
-                                ({((submission.totalScore / submission.maxScore) * 100).toFixed(0)}%)
+                            <div className="flex flex-col gap-0.5 tabular-nums">
+                              <span className="text-sm font-semibold">
+                                {((submission.totalScore / submission.maxScore) * 100).toFixed(0)}
+                                <span className="text-muted-foreground font-normal">%</span>
                               </span>
-                            </span>
+                              <span className="text-xs text-muted-foreground">
+                                {submission.totalScore.toFixed(1)}/{submission.maxScore}
+                              </span>
+                            </div>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
+                          <div className="flex flex-wrap justify-end gap-1.5">
                             <Button
                               size="sm"
                               variant="outline"
+                              className="h-8"
                               onClick={() => navigate(`/submissions/${submission.id}`)}
                             >
-                              <Eye className="h-4 w-4 mr-1.5" />
+                              <Eye className="h-3.5 w-3.5 mr-1" />
                               View
                             </Button>
 
-                            {/* Auto-grade — pending only */}
                             {submission.status === 'pending' && (
                               <Button
                                 size="sm"
+                                className="h-8"
                                 onClick={() => setConfirmDialog({ isOpen: true, submission })}
                                 disabled={isGrading}
                               >
                                 {isGrading ? (
-                                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                                 ) : (
-                                  <Sparkles className="h-4 w-4 mr-1.5" />
+                                  <Sparkles className="h-3.5 w-3.5 mr-1" />
                                 )}
-                                {isGrading ? 'Grading…' : 'Grade automatically'}
+                                {isGrading ? 'Grading…' : 'Auto-grade'}
                               </Button>
                             )}
 
-                            {/* Edit Grades — graded or awaiting_approval */}
                             {(submission.status === 'graded' || submission.status === 'awaiting_approval') && (
                               <Button
                                 size="sm"
-                                variant="outline"
-                                onClick={() => navigate(`/submissions/${submission.id}`)}
-                              >
-                                <Edit2 className="h-4 w-4 mr-1.5" />
-                                Edit Grades
-                              </Button>
-                            )}
-
-                            {/* Approve — graded or awaiting_approval */}
-                            {(submission.status === 'graded' || submission.status === 'awaiting_approval') && (
-                              <Button
-                                size="sm"
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                                className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white"
                                 onClick={() => handleApprove(submission.id)}
                               >
-                                <CheckCircle className="h-4 w-4 mr-1.5" />
-                                Approve
+                                <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                Release
                               </Button>
                             )}
 
-                            {/* Reject — graded, awaiting_approval, or approved */}
                             {['graded', 'awaiting_approval', 'approved'].includes(submission.status) && (
                               <Button
                                 size="sm"
-                                variant="destructive"
+                                variant="outline"
+                                className="h-8 border-rose-200/90 text-rose-800 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-200 dark:hover:bg-rose-950/50"
                                 onClick={() => handleReject(submission.id)}
                               >
-                                <ThumbsDown className="h-4 w-4 mr-1.5" />
-                                Reject
+                                <ThumbsDown className="h-3.5 w-3.5 mr-1" />
+                                Return
                               </Button>
                             )}
                           </div>

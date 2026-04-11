@@ -7,6 +7,15 @@ export interface User {
   role: UserRole;
   avatar?: string;
   createdAt: Date;
+  /** School, university, or organization */
+  institution?: string;
+  country?: string;
+  majorDepartment?: string;
+  yearOfStudy?: number;
+  gender?: string;
+  studentId?: string;
+  /** ISO date string (YYYY-MM-DD) from API */
+  dateOfBirth?: string;
 }
 
 export interface Course {

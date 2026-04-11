@@ -1,9 +1,9 @@
 """
 Pydantic schemas for API request/response validation
 """
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum
 
 
@@ -47,6 +47,13 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str
     role: UserRole
+    institution: Optional[str] = None
+    country: Optional[str] = None
+    majorDepartment: Optional[str] = None
+    yearOfStudy: Optional[int] = Field(None, ge=1, le=20)
+    gender: Optional[str] = None
+    studentId: Optional[str] = None
+    dateOfBirth: Optional[date] = None
 
 
 class UserResponse(BaseModel):
@@ -56,9 +63,31 @@ class UserResponse(BaseModel):
     role: UserRole
     avatar: Optional[str] = None
     createdAt: datetime
-    
+    institution: Optional[str] = None
+    country: Optional[str] = None
+    majorDepartment: Optional[str] = None
+    yearOfStudy: Optional[int] = None
+    gender: Optional[str] = None
+    studentId: Optional[str] = None
+    dateOfBirth: Optional[date] = None
+
     class Config:
         from_attributes = True
+
+
+class UserProfileUpdate(BaseModel):
+    """Partial update for the signed-in user."""
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
+    institution: Optional[str] = None
+    country: Optional[str] = None
+    majorDepartment: Optional[str] = None
+    yearOfStudy: Optional[int] = Field(None, ge=1, le=20)
+    gender: Optional[str] = None
+    studentId: Optional[str] = None
+    dateOfBirth: Optional[date] = None
 
 
 class Token(BaseModel):
