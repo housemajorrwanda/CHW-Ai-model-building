@@ -36,6 +36,7 @@ import { useRef, useEffect, useState } from 'react';
 import { useEditorLatexCompletion } from '@/hooks/useEditorLatexCompletion';
 import { EditorLatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { FormulaInserter } from './tools/FormulaInserter';
+import { questionOutlineLabel } from './questionOutlineLabel';
 
 interface QuestionEditorProps {
   question: Question;
@@ -194,6 +195,29 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor={`outline-title-${question.id}`} className="text-sm">
+              Outline label <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <Input
+              id={`outline-title-${question.id}`}
+              placeholder="e.g. Linear equations, Proof by induction"
+              value={question.outlineTitle ?? ''}
+              onChange={(e) =>
+                onUpdate({
+                  ...question,
+                  outlineTitle: e.target.value,
+                })
+              }
+              className="max-w-xl"
+            />
+            <p className="text-xs text-muted-foreground">
+              Preview:{' '}
+              <span className="font-medium text-foreground">
+                Q{question.number} · {questionOutlineLabel({ ...question, outlineTitle: question.outlineTitle ?? '' })}
+              </span>
+            </p>
+          </div>
           {/* Add Sub-question Button */}
           <Button
             variant="outline"

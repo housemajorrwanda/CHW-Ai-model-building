@@ -16,6 +16,12 @@ export interface User {
   studentId?: string;
   /** ISO date string (YYYY-MM-DD) from API */
   dateOfBirth?: string;
+  /** Server-side: show exam due / overdue rows in the notification feed */
+  remindExamDeadlinesEnabled?: boolean;
+  /** Hours before due date to trigger a “due soon” reminder (e.g. 168 = 1 week) */
+  remindExamOffsetsHours?: number[];
+  /** Server-side: enrollment + submission release reminders for instructors */
+  remindTeachingDeadlinesEnabled?: boolean;
 }
 
 export interface Course {
@@ -79,6 +85,8 @@ export interface SubmittedAnswer {
   questionNumber: number;
   extractedText?: string;
   extractedLatex?: string;
+  extractedTextDisplay?: string;
+  extractedMathLatex?: string;
   extractedSteps: ExtractedStep[];
   gradingResult?: GradingResult;
 }
@@ -105,6 +113,9 @@ export interface StepResult {
   feedback: string;
   expected?: string;
   received?: string;
+  expectedDisplay?: string;
+  receivedDisplay?: string;
+  receivedMathLatex?: string;
 }
 
 export interface DashboardStats {

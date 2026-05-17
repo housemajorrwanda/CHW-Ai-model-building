@@ -12,6 +12,8 @@ import {
   ClipboardList,
   User,
   Settings,
+  LineChart,
+  Megaphone,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -19,7 +21,9 @@ import { resolveAvatarUrl } from '@/lib/avatar';
 
 const professorLinks = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/analytics', icon: LineChart, label: 'Analytics' },
   { to: '/courses', icon: BookOpen, label: 'Courses' },
+  { to: '/announcements', icon: Megaphone, label: 'Announcements' },
   { to: '/exams', icon: FileText, label: 'Exams' },
   { to: '/submissions', icon: ClipboardList, label: 'Submissions' },
   { to: '/settings', icon: Settings, label: 'Settings' },
@@ -28,7 +32,9 @@ const professorLinks = [
 
 const studentLinks = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/analytics', icon: LineChart, label: 'Analytics' },
   { to: '/browse-courses', icon: BookOpen, label: 'Browse Courses' },
+  { to: '/announcements', icon: Megaphone, label: 'Announcements' },
   { to: '/my-exams', icon: FileText, label: 'My Exams' },
   { to: '/my-results', icon: BarChart3, label: 'My Results' },
   { to: '/settings', icon: Settings, label: 'Settings' },
@@ -39,7 +45,8 @@ const adminLinks = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/users', icon: Users, label: 'Users' },
   { to: '/all-courses', icon: BookOpen, label: 'All Courses' },
-  { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/announcements', icon: Megaphone, label: 'Announcements' },
+  { to: '/analytics', icon: LineChart, label: 'Analytics' },
   { to: '/settings', icon: Settings, label: 'Settings' },
   { to: '/profile', icon: User, label: 'Profile' },
 ];
@@ -93,10 +100,24 @@ export function Sidebar() {
 
         {/* Navigation */}
         <nav className="flex-1 space-y-1 p-3">
+          {user?.role === 'student' && (
+            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/45">
+              Workspace
+            </p>
+          )}
           {links.map((link) => {
+            const isCourses = link.to === '/courses';
+            const isAnnouncements = link.to === '/announcements';
             const isActive =
               location.pathname === link.to ||
-              (link.to !== '/dashboard' && location.pathname.startsWith(`${link.to}/`));
+              (isAnnouncements && location.pathname.endsWith('/announcements')) ||
+              (isCourses &&
+                location.pathname.startsWith('/courses') &&
+                !location.pathname.includes('/announcements')) ||
+              (!isAnnouncements &&
+                !isCourses &&
+                link.to !== '/dashboard' &&
+                location.pathname.startsWith(`${link.to}/`));
             return (
               <Link
                 key={link.to}

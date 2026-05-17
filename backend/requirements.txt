@@ -18,7 +18,19 @@ pyjwt>=2.8.0
 
 # OCR
 pytesseract>=0.3.10
-# easyocr>=1.7.0  # Commented out - too large for Railway (8.3GB+), use Tesseract instead
+# Optional: much better on handwritten scans (large). Enable with USE_EASYOCR=1 — not used on slim deploys.
+# easyocr>=1.7.0
+
+# Local math/handwriting models (free, no API key):
+#   - microsoft/trocr-base-handwritten (English handwriting)         loaded from `transformers`
+#   - fhswf/TrOCR_Math_handwritten     (handwritten formulas→LaTeX)  loaded from `transformers`
+#   - pix2tex (LaTeX-OCR)              (handwritten formulas→LaTeX)  second math opinion
+# The TrOCR models live in `transformers`; pix2tex is a separate package.
+# pix2tex pulls torch/torchvision/timm/etc.; safe to comment out on slim deploys.
+pix2tex>=0.1.4
+
+# Cloud OCR providers (Mathpix / Google Vision / Azure Read) — used when MATH_OCR_PROVIDER + creds are set.
+requests>=2.31.0
 
 # Image processing
 Pillow>=10.0.0

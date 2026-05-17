@@ -14,10 +14,12 @@ import {
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { submissionsAPI, examsAPI, type SubmissionDetail, type ExamDetail } from '@/lib/api';
+import { submissionsAPI, examsAPI, type SubmissionDetail, type ExamDetail, type SubmissionAnswer } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { toast } from 'sonner';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 import {
   Dialog,
   DialogContent,
@@ -74,6 +76,71 @@ const btnSecondary =
   'border-violet-300/80 bg-white hover:bg-violet-50 text-violet-900 dark:border-violet-700 dark:bg-violet-950/40 dark:hover:bg-violet-900/50 dark:text-violet-100 font-medium shadow-sm';
 const btnSuccess =
   'shadow-sm font-semibold bg-emerald-600 text-white hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2';
+
+function answerLooksLikeRichHtml(s: string): boolean {
+  return /<\s*[a-zA-Z]/.test(s);
+}
+
+function RenderedExtractedMath({ latex, displayMode }: { latex: string; displayMode?: boolean }) {
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(latex, {
+        throwOnError: false,
+        displayMode: displayMode !== false,
+        strict: false,
+      });
+    } catch {
+      return '';
+    }
+  }, [latex, displayMode]);
+  if (!html) return null;
+  return (
+    <div
+      className={cn(
+        'rounded-lg border border-border/60 bg-background text-foreground',
+        displayMode === false
+          ? 'inline-block px-1.5 py-0.5 text-base mx-0.5 align-middle'
+          : 'overflow-x-auto px-3 py-2 text-lg mb-2'
+      )}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function StudentExtractedAnswerBlock({ answer }: { answer: SubmissionAnswer }) {
+  const rawText = answer.extractedText;
+  const disp = answer.extractedTextDisplay;
+  const ml = answer.extractedMathLatex;
+  const rawLatex = answer.extractedLatex;
+
+  if (rawText && answerLooksLikeRichHtml(rawText)) {
+    return (
+      <div className="space-y-3">
+        {ml ? <RenderedExtractedMath latex={ml} /> : null}
+        <div
+          className="prose prose-base max-w-none prose-p:leading-relaxed prose-headings:font-semibold"
+          dangerouslySetInnerHTML={{ __html: rawText }}
+        />
+      </div>
+    );
+  }
+
+  const line = (disp || rawText || rawLatex || '').trim() || 'No answer provided';
+  const showNoiseHint =
+    !!rawText && !disp && !ml && line !== 'No answer provided' && line.length > 80;
+
+  return (
+    <div className="space-y-3">
+      {ml ? <RenderedExtractedMath latex={ml} /> : null}
+      <p className="text-base leading-relaxed break-words font-medium text-foreground">{line}</p>
+      {showNoiseHint ? (
+        <p className="text-xs text-muted-foreground">
+          Showing raw OCR text. If this looks garbled, open the submitted file or try a clearer scan.
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export default function SubmissionDetail() {
   const { id } = useParams();
@@ -639,16 +706,7 @@ export default function SubmissionDetail() {
                       <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
                       Student&apos;s answer
                     </p>
-                    {answer.extractedText ? (
-                      <div
-                        className="prose prose-base max-w-none prose-p:leading-relaxed prose-headings:font-semibold"
-                        dangerouslySetInnerHTML={{ __html: answer.extractedText }}
-                      />
-                    ) : (
-                      <p className="font-mono text-base text-foreground/90">
-                        {answer.extractedLatex ?? 'No answer provided'}
-                      </p>
-                    )}
+                    <StudentExtractedAnswerBlock answer={answer} />
                   </div>
 
                   {/* Step-by-step results */}
@@ -715,16 +773,21 @@ export default function SubmissionDetail() {
                                     Expected (matched target)
                                   </span>
                                   <span className="font-mono break-words block text-[0.95rem] leading-snug">
-                                    {step.expected ?? '—'}
+                                    {step.expectedDisplay ?? step.expected ?? '—'}
                                   </span>
                                 </div>
                                 <div className="rounded-lg bg-background/95 border border-border/80 p-3 min-w-0">
                                   <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
                                     Received (extracted)
                                   </span>
-                                  <span className="font-mono break-words block text-[0.95rem] leading-snug">
-                                    {step.received ?? '—'}
-                                  </span>
+                                  <div className="space-y-2 min-w-0">
+                                    {step.receivedMathLatex ? (
+                                      <RenderedExtractedMath latex={step.receivedMathLatex} displayMode={false} />
+                                    ) : null}
+                                    <span className="font-mono break-words block text-[0.95rem] leading-snug">
+                                      {step.receivedDisplay ?? step.received ?? '—'}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             )}
@@ -972,16 +1035,7 @@ export default function SubmissionDetail() {
                       <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                         {isProfessor ? "Student's response" : 'Your answer'}
                       </p>
-                      {activeCompareAnswer.extractedText ? (
-                        <div
-                          className="prose prose-base max-w-none prose-p:leading-relaxed"
-                          dangerouslySetInnerHTML={{ __html: activeCompareAnswer.extractedText }}
-                        />
-                      ) : (
-                        <p className="font-mono text-base break-words leading-relaxed">
-                          {activeCompareAnswer.extractedLatex ?? 'No answer provided'}
-                        </p>
-                      )}
+                      <StudentExtractedAnswerBlock answer={activeCompareAnswer} />
                     </div>
                   </div>
 
@@ -1110,16 +1164,21 @@ export default function SubmissionDetail() {
                                               Expected (matched target)
                                             </span>
                                             <span className="font-mono break-words text-[0.95rem] leading-snug">
-                                              {step.expected ?? '—'}
+                                              {step.expectedDisplay ?? step.expected ?? '—'}
                                             </span>
                                           </div>
                                           <div className="rounded-lg bg-background/95 border border-border/80 p-3 min-w-0">
                                             <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
                                               Received (extracted)
                                             </span>
-                                            <span className="font-mono break-words text-[0.95rem] leading-snug">
-                                              {step.received ?? '—'}
-                                            </span>
+                                            <div className="space-y-2 min-w-0">
+                                              {step.receivedMathLatex ? (
+                                                <RenderedExtractedMath latex={step.receivedMathLatex} displayMode={false} />
+                                              ) : null}
+                                              <span className="font-mono break-words text-[0.95rem] leading-snug">
+                                                {step.receivedDisplay ?? step.received ?? '—'}
+                                              </span>
+                                            </div>
                                           </div>
                                         </div>
                                       )}

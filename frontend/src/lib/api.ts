@@ -120,6 +120,9 @@ export const authAPI = {
     gender?: string;
     studentId?: string;
     dateOfBirth?: string | null;
+    remindExamDeadlinesEnabled?: boolean;
+    remindExamOffsetsHours?: number[];
+    remindTeachingDeadlinesEnabled?: boolean;
   }) {
     return apiCall('/auth/me', {
       method: 'PUT',
@@ -317,7 +320,40 @@ export const examsAPI = {
     }
     return response.json() as Promise<AnswerPdfPreviewResponse>;
   },
+
+  /** Which OCR engines are currently wired up on the backend. */
+  async getOcrStatus(): Promise<OcrStatusResponse> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/ocr/status`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) throw new Error('Failed to fetch OCR status');
+    return response.json() as Promise<OcrStatusResponse>;
+  },
 };
+
+export interface OcrStatusResponse {
+  cloud: {
+    active: 'mathpix' | 'gcv' | 'azure' | null;
+    available: string[];
+    configured: string[];
+  };
+  localTrocr: {
+    enabled: boolean;
+    runtimeAvailable: boolean;
+    /** Prose TrOCR checkpoint (same as `proseModel` when present). */
+    model: string | null;
+    proseModel?: string | null;
+    mathTrocrModel?: string | null;
+    pix2texOptIn?: boolean;
+    pix2texReady?: boolean;
+    /** `full` = math model on every line at submit time; `heuristic` = cheaper path */
+    mathEnsembleMode?: string | null;
+  };
+  localEasyOcr: boolean;
+  tesseract: boolean;
+  summary: string;
+}
 
 /** Response from POST /exams/:id/preview-answer-pdf */
 export interface AnswerPdfPreviewResponse {
@@ -334,6 +370,10 @@ export interface AnswerPdfPreviewResponse {
       hasContent: boolean | null;
       delivery: string;
     }>;
+    /** Plain-text excerpt for review (OCR or extracted PDF text), may be approximate for handwriting */
+    answerExcerpt?: string | null;
+    /** 1-based page index in the answer PDF when using per-page routing */
+    pdfPage?: number | null;
     note?: string;
   }>;
   warnings: string[];
@@ -350,6 +390,14 @@ export interface GradingStepResult {
   id: string;
   score?: number;
   feedback?: string;
+  stepNumber?: number;
+  isCorrect?: boolean;
+  maxScore?: number;
+  expected?: string;
+  received?: string;
+  expectedDisplay?: string;
+  receivedDisplay?: string;
+  receivedMathLatex?: string;
 }
 
 export interface GradingResult {
@@ -368,6 +416,10 @@ export interface SubmissionAnswer {
   gradingResultId?: string;
   extractedText?: string;
   extractedLatex?: string;
+  /** Cleaned / normalized transcript for reading (API adds from SymPy + heuristics) */
+  extractedTextDisplay?: string;
+  /** KaTeX-ready LaTeX when the backend could normalize an expression */
+  extractedMathLatex?: string;
 }
 
 export interface SubmissionDetail {
@@ -384,6 +436,7 @@ export interface SubmissionDetail {
 export interface ExamQuestion {
   id: string;
   text?: string;
+  outlineTitle?: string | null;
   goldSolution?: { steps?: unknown[] };
   goldSolutionSteps?: unknown;
   finalAnswer?: string;
@@ -499,12 +552,93 @@ export const submissionsAPI = {
 };
 
 // ============================================================================
+// Notifications
+// ============================================================================
+
+export type NotificationFeedItem = {
+  id: string;
+  category: 'notification' | 'reminder';
+  kind: string;
+  title: string;
+  body?: string | null;
+  link?: string | null;
+  createdAt: string;
+  readAt?: string | null;
+  scheduledReminderId?: string | null;
+  repeat?: string | null;
+};
+
+export type NotificationFeedResponse = {
+  items: NotificationFeedItem[];
+  unreadCount: number;
+};
+
+export const notificationsAPI = {
+  async getFeed(limit = 80): Promise<NotificationFeedResponse> {
+    return apiCall(`/notifications?limit=${limit}`);
+  },
+
+  async markRead(notificationId: string) {
+    return apiCall(`/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'PATCH',
+    });
+  },
+
+  async markAllRead() {
+    return apiCall<{ marked: number }>('/notifications/read-all', { method: 'POST' });
+  },
+};
+
+export type ScheduleRepeat = 'none' | 'daily' | 'weekly' | 'monthly';
+
+export type DueReminderItem = {
+  id: string;
+  title: string;
+  body?: string | null;
+  link?: string | null;
+  remindAt: string;
+  repeat: string;
+};
+
+export const remindersAPI = {
+  async getDue(): Promise<DueReminderItem[]> {
+    return apiCall('/reminders/due');
+  },
+
+  async schedule(payload: {
+    sourceKey: string;
+    title: string;
+    body?: string;
+    link?: string;
+    userNote?: string;
+    remindAt: string;
+    repeat: ScheduleRepeat;
+  }) {
+    return apiCall<{ id: string }>('/reminders/schedule', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async acknowledge(reminderId: string) {
+    return apiCall<{ ok: boolean }>(
+      `/reminders/scheduled/${encodeURIComponent(reminderId)}/acknowledge`,
+      { method: 'POST' }
+    );
+  },
+};
+
+// ============================================================================
 // Dashboard API
 // ============================================================================
 
 export const dashboardAPI = {
   async getStats() {
     return apiCall('/dashboard/stats');
+  },
+
+  async getAnalytics() {
+    return apiCall('/dashboard/analytics');
   },
 };
 

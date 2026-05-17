@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -12,7 +13,17 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
-import { FunctionSquare, AlignCenter, AlignLeft, Pencil, ChevronDown, ChevronUp, PenLine, Keyboard } from 'lucide-react';
+import {
+  FunctionSquare,
+  AlignCenter,
+  AlignLeft,
+  Pencil,
+  ChevronDown,
+  ChevronUp,
+  PenLine,
+  Keyboard,
+  Info,
+} from 'lucide-react';
 import { useLatexAutocomplete, LatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { cn } from '@/lib/utils';
 
@@ -119,6 +130,13 @@ const LARGE_OPS_MORE: { label: string; latex: string; cursorOffset: number }[] =
 
 const FORMULA_INPUT_MODE_KEY = 'mathgrade:formula-input-mode';
 
+const snippetOutlineBtn =
+  'h-9 rounded-lg border border-border/80 bg-background px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:border-primary/35 hover:bg-accent/80';
+const snippetSymbolBtn =
+  'h-9 w-9 shrink-0 rounded-lg border border-border/80 bg-background text-sm font-medium shadow-sm transition-colors hover:border-primary/35 hover:bg-accent/80';
+const snippetMoreBtn =
+  'h-9 gap-1 rounded-lg px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
+
 /** MathLive uses `{#?}` / `#?` for holes; map to normal empty TeX groups for the LaTeX textarea. */
 function mathLiveSnippetToPlainLatex(snippet: string): string {
   return snippet.replace(/\{#\?\}/g, '{}').replace(/#\?/g, '{}');
@@ -153,8 +171,8 @@ function FormulaRenderer({ latex, displayMode }: { latex: string; displayMode: b
       }
     });
   }, [latex, displayMode]);
-  if (!latex) return <span className="text-muted-foreground/80 text-sm">Preview</span>;
-  return <div ref={ref} />;
+  if (!latex) return <span className="text-sm text-muted-foreground">Rendered output appears here</span>;
+  return <div ref={ref} className="[&_.katex]:text-base [&_.katex-display]:my-1" />;
 }
 
 export function FormulaInserter({
@@ -290,14 +308,26 @@ export function FormulaInserter({
   const isEditing = Boolean(onUpdate && open && initialLatex !== undefined);
 
   const previewPanel = (
-    <div className="space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">Preview</span>
-      <div className="flex min-h-[48px] items-center justify-center rounded-lg border border-dashed border-muted-foreground/25 bg-muted/25 px-3 py-2">
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Preview</span>
+        <span className="text-[10px] text-muted-foreground tabular-nums">
+          {displayMode ? 'Block' : 'Inline'}
+        </span>
+      </div>
+      <div
+        className={cn(
+          'flex min-h-[56px] items-center justify-center rounded-xl border border-dashed px-3 py-3',
+          'border-muted-foreground/25 bg-muted/20',
+          displayMode ? 'min-h-[72px]' : 'min-h-[56px]'
+        )}
+      >
         {displayMode ? (
           <FormulaRenderer latex={latex} displayMode={true} />
         ) : (
-          <span className="text-sm text-muted-foreground">
-            Inline: <FormulaRenderer latex={latex || 'x'} displayMode={false} />
+          <span className="inline-flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span className="shrink-0">Inline sample:</span>
+            <FormulaRenderer latex={latex || 'x'} displayMode={false} />
           </span>
         )}
       </div>
@@ -305,417 +335,466 @@ export function FormulaInserter({
   );
 
   const dialogContent = (
-    <DialogContent className="max-h-[85vh] max-w-2xl gap-4 overflow-y-auto p-5 sm:p-6">
-        <DialogHeader className="space-y-0 pb-1">
-          <DialogTitle className="flex items-center gap-2 text-lg">
+    <DialogContent
+      className={cn(
+        'flex max-h-[min(90vh,880px)] w-[calc(100vw-1.25rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0',
+        'sm:rounded-xl sm:w-full'
+      )}
+    >
+      <div className="shrink-0 space-y-4 border-b border-border/60 bg-muted/15 px-5 pb-4 pt-5 pr-12 dark:bg-muted/10">
+        <DialogHeader className="space-y-1.5 text-left">
+          <DialogTitle className="flex items-center gap-2.5 text-xl font-semibold tracking-tight">
             {isEditing ? (
               <>
-                <Pencil className="h-5 w-5 text-primary" />
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Pencil className="h-4 w-4" />
+                </span>
                 Edit equation
               </>
             ) : (
               <>
-                <FunctionSquare className="h-5 w-5 text-primary" />
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <FunctionSquare className="h-4 w-4" />
+                </span>
                 Insert equation
               </>
             )}
           </DialogTitle>
+          <DialogDescription className="text-sm leading-relaxed text-muted-foreground">
+            {displayMode
+              ? 'Block equations sit on their own line. Use snippets below to insert structure at the cursor.'
+              : 'Inline math flows with text. Switch to Block for large formulas or integrals.'}
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-1 rounded-lg bg-muted/50 p-1 w-fit">
+        <div
+          role="group"
+          aria-label="Equation layout"
+          className="grid h-11 w-full grid-cols-2 gap-1 rounded-xl border border-border/70 bg-muted/40 p-1 dark:bg-muted/30"
+        >
           <button
             type="button"
             onClick={() => setDisplayMode(false)}
             className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors',
-              !displayMode ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'
+              'inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-all',
+              !displayMode
+                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/80'
+                : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            <AlignLeft className="h-3.5 w-3.5" />
+            <AlignLeft className="h-4 w-4 opacity-70" />
             Inline
           </button>
           <button
             type="button"
             onClick={() => setDisplayMode(true)}
             className={cn(
-              'flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors',
-              displayMode ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'
+              'inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-all',
+              displayMode
+                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/80'
+                : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            <AlignCenter className="h-3.5 w-3.5" />
+            <AlignCenter className="h-4 w-4 opacity-70" />
             Block
           </button>
         </div>
+      </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
         <Tabs defaultValue="write" className="w-full">
-          <TabsList className="grid h-10 w-full max-w-xs grid-cols-2">
-            <TabsTrigger value="write" className="text-sm">
+          <TabsList className="mb-4 grid h-11 w-full grid-cols-2 rounded-xl border border-border/70 bg-muted/40 p-1 dark:bg-muted/30">
+            <TabsTrigger
+              value="write"
+              className="rounded-lg text-sm font-medium data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border/60"
+            >
               Write
             </TabsTrigger>
-            <TabsTrigger value="common" className="text-sm">
+            <TabsTrigger
+              value="common"
+              className="rounded-lg text-sm font-medium data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:ring-1 data-[state=active]:ring-border/60"
+            >
               Templates
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="write" className="mt-3 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex gap-1 rounded-lg bg-muted/50 p-1">
-                <button
-                  type="button"
-                  onClick={() => persistFormulaInputMode('visual')}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:text-sm',
-                    formulaInputMode === 'visual'
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
+          <TabsContent value="write" className="mt-0 space-y-4 focus-visible:outline-none">
+            <div className="rounded-xl border border-border/60 bg-card/50 p-3 shadow-sm dark:bg-card/30">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div
+                  role="group"
+                  aria-label="Input mode"
+                  className="inline-flex gap-1 rounded-lg border border-border/50 bg-muted/30 p-1"
                 >
-                  <PenLine className="h-3.5 w-3.5 shrink-0" />
-                  Visual
-                </button>
-                <button
-                  type="button"
-                  onClick={() => persistFormulaInputMode('latex')}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:text-sm',
-                    formulaInputMode === 'latex'
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  <Keyboard className="h-3.5 w-3.5 shrink-0" />
-                  LaTeX
-                </button>
-              </div>
-              <span className="text-[10px] text-muted-foreground" title="Visual vs LaTeX choice is remembered">
-                Saved in this browser
-              </span>
-            </div>
-
-            {formulaInputMode === 'visual' ? (
-              <div className="space-y-3">
-                <VisualMathField
-                  ref={mathFieldRef}
-                  value={latex}
-                  onChange={(v) => {
-                    setLatex(v);
-                    setError('');
-                  }}
-                  className="w-full"
-                />
-                {previewPanel}
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="relative space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">LaTeX</label>
-                  <Textarea
-                    ref={latexAutocomplete.ref}
-                    placeholder={'e.g. x^2 + \\frac{1}{2}'}
-                    value={latex}
-                    onChange={handleChange}
-                    onSelect={handleSelect}
-                    rows={4}
-                    className="resize-none font-mono text-sm placeholder:text-muted-foreground/60 border-muted-foreground/20 focus-visible:ring-1"
-                    onKeyDown={(e) => {
-                      latexAutocomplete.onKeyDown(e);
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInsert();
-                    }}
-                  />
-                  {latexAutocomplete.showList && (
-                    <LatexCompletionsList
-                      completions={latexAutocomplete.completions}
-                      selectedIndex={latexAutocomplete.selectedIndex}
-                      onSelect={(snippet) => latexAutocomplete.apply(snippet)}
-                    />
-                  )}
-                </div>
-                <p className="text-[11px] text-muted-foreground">Ctrl/⌘ + Enter to insert</p>
-                {previewPanel}
-              </div>
-            )}
-
-            <div className="space-y-3 border-t pt-3">
-            <p className="text-[11px] font-medium text-muted-foreground">Snippets · insert at cursor</p>
-
-            {/* Structures first (basic + … more) */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Structures</span>
-              <div className="flex flex-wrap gap-1 items-center">
-                {BASIC_STRUCTURES.map((s) => (
-                  <Button
-                    key={s.label}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertSnippet(s.latex, s.cursorOffset)}
-                  >
-                    {s.label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-xs text-muted-foreground"
-                  onClick={() => setShowMoreStructures((v) => !v)}
-                >
-                  {showMoreStructures ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  {showMoreStructures ? 'Less' : 'More'}
-                </Button>
-              </div>
-              {showMoreStructures && (
-                <div className="flex flex-wrap gap-1">
-                  {MORE_STRUCTURES.map((s) => (
-                    <Button
-                      key={s.label}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertSnippet(s.latex, s.cursorOffset)}
-                    >
-                      {s.label}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Brackets (basic + … more) */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Brackets</span>
-              <div className="flex flex-wrap gap-1 items-center">
-                {BRACKETS_BASIC.map((b) => (
-                  <Button
-                    key={b.label}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertSnippet(b.latex, b.cursorOffset)}
-                  >
-                    {b.label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-xs text-muted-foreground"
-                  onClick={() => setShowMoreBrackets((v) => !v)}
-                >
-                  {showMoreBrackets ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  {showMoreBrackets ? 'Less' : 'More'}
-                </Button>
-              </div>
-              {showMoreBrackets && (
-                <div className="flex flex-wrap gap-1">
-                  {BRACKETS_MORE.map((b) => (
-                    <Button
-                      key={b.label}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertSnippet(b.latex, b.cursorOffset)}
-                    >
-                      {b.label}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Functions (basic + … more) */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Functions</span>
-              <div className="flex flex-wrap gap-1 items-center">
-                {FUNCTIONS_BASIC.map((f) => (
-                  <Button
-                    key={f.label}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertSnippet(f.latex, f.cursorOffset)}
-                  >
-                    {f.label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-xs text-muted-foreground"
-                  onClick={() => setShowMoreFunctions((v) => !v)}
-                >
-                  {showMoreFunctions ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  {showMoreFunctions ? 'Less' : 'More'}
-                </Button>
-              </div>
-              {showMoreFunctions && (
-                <div className="flex flex-wrap gap-1">
-                  {FUNCTIONS_MORE.map((f) => (
-                    <Button
-                      key={f.label}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertSnippet(f.latex, f.cursorOffset)}
-                    >
-                      {f.label}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Large operators (basic + … more) */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Operators</span>
-              <div className="flex flex-wrap gap-1 items-center">
-                {LARGE_OPS_BASIC.map((op) => (
-                  <Button
-                    key={op.label}
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                    onClick={() => insertSnippet(op.latex, op.cursorOffset)}
-                  >
-                    {op.label}
-                  </Button>
-                ))}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-xs text-muted-foreground"
-                  onClick={() => setShowMoreLargeOps((v) => !v)}
-                >
-                  {showMoreLargeOps ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  {showMoreLargeOps ? 'Less' : 'More'}
-                </Button>
-              </div>
-              {showMoreLargeOps && (
-                <div className="flex flex-wrap gap-1">
-                  {LARGE_OPS_MORE.map((op) => (
-                    <Button
-                      key={op.label}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground border-muted-foreground/25"
-                      onClick={() => insertSnippet(op.latex, op.cursorOffset)}
-                    >
-                      {op.label}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Symbols (basic + … more) */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Symbols</span>
-              <div className="flex flex-wrap gap-1 items-center">
-                {BASIC_SYMBOLS.map((sym) => (
                   <button
-                    key={sym}
                     type="button"
-                    className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                    onClick={() => insertSnippet(sym, sym.length)}
+                    onClick={() => persistFormulaInputMode('visual')}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition-all sm:text-sm',
+                      formulaInputMode === 'visual'
+                        ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
                   >
-                    {sym}
+                    <PenLine className="h-3.5 w-3.5 shrink-0" />
+                    Visual
                   </button>
-                ))}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-xs text-muted-foreground"
-                  onClick={() => setShowMoreSymbols((v) => !v)}
+                  <button
+                    type="button"
+                    onClick={() => persistFormulaInputMode('latex')}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition-all sm:text-sm',
+                      formulaInputMode === 'latex'
+                        ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <Keyboard className="h-3.5 w-3.5 shrink-0" />
+                    LaTeX
+                  </button>
+                </div>
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground"
+                  title="Visual vs LaTeX preference is saved in this browser for next time."
                 >
-                  {showMoreSymbols ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  {showMoreSymbols ? 'Less' : 'More'}
-                </Button>
+                  <Info className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
+                  <span className="hidden sm:inline">Saved locally</span>
+                </span>
               </div>
-              {showMoreSymbols && (
-                <div className="space-y-1">
-                  <div className="flex flex-wrap gap-1">
-                    {MORE_SYMBOLS_ROW1.map((sym) => (
-                      <button
-                        key={sym}
-                        type="button"
-                        className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                        onClick={() => insertSnippet(sym, sym.length)}
-                      >
-                        {sym}
-                      </button>
-                    ))}
+
+              {formulaInputMode === 'visual' ? (
+                <div className="space-y-4">
+                  <VisualMathField
+                    ref={mathFieldRef}
+                    value={latex}
+                    onChange={(v) => {
+                      setLatex(v);
+                      setError('');
+                    }}
+                    className="w-full"
+                  />
+                  {previewPanel}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="relative space-y-1.5">
+                    <label htmlFor="formula-latex-input" className="text-xs font-medium text-muted-foreground">
+                      LaTeX source
+                    </label>
+                    <Textarea
+                      id="formula-latex-input"
+                      ref={latexAutocomplete.ref}
+                      placeholder={'e.g. x^2 + \\frac{1}{2}'}
+                      value={latex}
+                      onChange={handleChange}
+                      onSelect={handleSelect}
+                      rows={5}
+                      className="resize-y font-mono text-sm placeholder:text-muted-foreground/50 min-h-[120px] border-border/80 focus-visible:ring-1"
+                      onKeyDown={(e) => {
+                        latexAutocomplete.onKeyDown(e);
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleInsert();
+                      }}
+                    />
+                    {latexAutocomplete.showList && (
+                      <LatexCompletionsList
+                        completions={latexAutocomplete.completions}
+                        selectedIndex={latexAutocomplete.selectedIndex}
+                        onSelect={(snippet) => latexAutocomplete.apply(snippet)}
+                      />
+                    )}
                   </div>
-                  <div className="flex flex-wrap gap-1">
-                    {MORE_SYMBOLS_ROW2.map((sym) => (
-                      <button
-                        key={sym}
-                        type="button"
-                        className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                        onClick={() => insertSnippet(sym, sym.length)}
-                      >
-                        {sym}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    <span className="mr-1 self-center text-[10px] text-muted-foreground">Rel.</span>
-                    {MORE_SYMBOLS_ROW3.map((sym) => (
-                      <button
-                        key={sym}
-                        type="button"
-                        className="h-8 w-8 rounded border border-muted-foreground/20 bg-muted/30 hover:bg-muted/60 text-sm font-medium transition-colors"
-                        onClick={() => insertSnippet(sym, sym.length)}
-                      >
-                        {sym}
-                      </button>
-                    ))}
-                  </div>
+                  <p className="text-[11px] text-muted-foreground">Tip: Ctrl or ⌘ + Enter inserts from this dialog.</p>
+                  {previewPanel}
                 </div>
               )}
             </div>
 
+            <div className="rounded-xl border border-border/60 bg-muted/10 p-4 dark:bg-muted/5">
+              <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Snippets — insert at cursor
+              </p>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/90">
+                    Structures
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {BASIC_STRUCTURES.map((s) => (
+                      <Button
+                        key={s.label}
+                        type="button"
+                        variant="outline"
+                        className={snippetOutlineBtn}
+                        onClick={() => insertSnippet(s.latex, s.cursorOffset)}
+                      >
+                        {s.label}
+                      </Button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={snippetMoreBtn}
+                      onClick={() => setShowMoreStructures((v) => !v)}
+                    >
+                      {showMoreStructures ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      {showMoreStructures ? 'Less' : 'More'}
+                    </Button>
+                  </div>
+                  {showMoreStructures && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {MORE_STRUCTURES.map((s) => (
+                        <Button
+                          key={s.label}
+                          type="button"
+                          variant="outline"
+                          className={snippetOutlineBtn}
+                          onClick={() => insertSnippet(s.latex, s.cursorOffset)}
+                        >
+                          {s.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/90">
+                    Brackets
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {BRACKETS_BASIC.map((b) => (
+                      <Button
+                        key={b.label}
+                        type="button"
+                        variant="outline"
+                        className={snippetOutlineBtn}
+                        onClick={() => insertSnippet(b.latex, b.cursorOffset)}
+                      >
+                        {b.label}
+                      </Button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={snippetMoreBtn}
+                      onClick={() => setShowMoreBrackets((v) => !v)}
+                    >
+                      {showMoreBrackets ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      {showMoreBrackets ? 'Less' : 'More'}
+                    </Button>
+                  </div>
+                  {showMoreBrackets && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {BRACKETS_MORE.map((b) => (
+                        <Button
+                          key={b.label}
+                          type="button"
+                          variant="outline"
+                          className={snippetOutlineBtn}
+                          onClick={() => insertSnippet(b.latex, b.cursorOffset)}
+                        >
+                          {b.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/90">
+                    Functions
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {FUNCTIONS_BASIC.map((f) => (
+                      <Button
+                        key={f.label}
+                        type="button"
+                        variant="outline"
+                        className={snippetOutlineBtn}
+                        onClick={() => insertSnippet(f.latex, f.cursorOffset)}
+                      >
+                        {f.label}
+                      </Button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={snippetMoreBtn}
+                      onClick={() => setShowMoreFunctions((v) => !v)}
+                    >
+                      {showMoreFunctions ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      {showMoreFunctions ? 'Less' : 'More'}
+                    </Button>
+                  </div>
+                  {showMoreFunctions && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {FUNCTIONS_MORE.map((f) => (
+                        <Button
+                          key={f.label}
+                          type="button"
+                          variant="outline"
+                          className={snippetOutlineBtn}
+                          onClick={() => insertSnippet(f.latex, f.cursorOffset)}
+                        >
+                          {f.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/90">
+                    Operators
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {LARGE_OPS_BASIC.map((op) => (
+                      <Button
+                        key={op.label}
+                        type="button"
+                        variant="outline"
+                        className={snippetOutlineBtn}
+                        onClick={() => insertSnippet(op.latex, op.cursorOffset)}
+                      >
+                        {op.label}
+                      </Button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={snippetMoreBtn}
+                      onClick={() => setShowMoreLargeOps((v) => !v)}
+                    >
+                      {showMoreLargeOps ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      {showMoreLargeOps ? 'Less' : 'More'}
+                    </Button>
+                  </div>
+                  {showMoreLargeOps && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {LARGE_OPS_MORE.map((op) => (
+                        <Button
+                          key={op.label}
+                          type="button"
+                          variant="outline"
+                          className={snippetOutlineBtn}
+                          onClick={() => insertSnippet(op.latex, op.cursorOffset)}
+                        >
+                          {op.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/90">
+                    Symbols
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {BASIC_SYMBOLS.map((sym) => (
+                      <button
+                        key={sym}
+                        type="button"
+                        className={snippetSymbolBtn}
+                        onClick={() => insertSnippet(sym, sym.length)}
+                      >
+                        {sym}
+                      </button>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={snippetMoreBtn}
+                      onClick={() => setShowMoreSymbols((v) => !v)}
+                    >
+                      {showMoreSymbols ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                      {showMoreSymbols ? 'Less' : 'More'}
+                    </Button>
+                  </div>
+                  {showMoreSymbols && (
+                    <div className="space-y-2 pt-0.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        {MORE_SYMBOLS_ROW1.map((sym) => (
+                          <button
+                            key={sym}
+                            type="button"
+                            className={snippetSymbolBtn}
+                            onClick={() => insertSnippet(sym, sym.length)}
+                          >
+                            {sym}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {MORE_SYMBOLS_ROW2.map((sym) => (
+                          <button
+                            key={sym}
+                            type="button"
+                            className={snippetSymbolBtn}
+                            onClick={() => insertSnippet(sym, sym.length)}
+                          >
+                            {sym}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <span className="mr-1 self-center text-[10px] font-medium uppercase text-muted-foreground">
+                          Rel.
+                        </span>
+                        {MORE_SYMBOLS_ROW3.map((sym) => (
+                          <button
+                            key={sym}
+                            type="button"
+                            className={snippetSymbolBtn}
+                            onClick={() => insertSnippet(sym, sym.length)}
+                          >
+                            {sym}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {error && (
-              <p className="text-sm text-destructive bg-destructive/10 px-2 py-1 rounded">{error}</p>
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {error}
+              </p>
             )}
           </TabsContent>
 
-          <TabsContent value="common" className="mt-3">
-            <div className="grid grid-cols-1 gap-1.5 max-h-[320px] overflow-y-auto pr-1">
+          <TabsContent value="common" className="mt-0 focus-visible:outline-none">
+            <p className="mb-3 text-sm text-muted-foreground">
+              Pick a common identity, fill any variables, then insert—or tap a row to load it into Write.
+            </p>
+            <div className="grid max-h-[min(52vh,420px)] grid-cols-1 gap-2 overflow-y-auto overscroll-contain pr-1">
               {commonFormulas.map((formula, idx) => (
                 <div key={idx} className="space-y-1.5">
                   {formula.variables ? (
-                    <div className="p-2.5 rounded-md border border-muted-foreground/15 bg-muted/20 space-y-2">
-                      <span className="text-sm font-medium">{formula.label}</span>
-                      <div className="flex flex-wrap gap-2 items-center">
+                    <div className="space-y-2 rounded-xl border border-border/60 bg-card/60 p-3 shadow-sm dark:bg-card/40">
+                      <span className="text-sm font-semibold">{formula.label}</span>
+                      <div className="flex flex-wrap items-center gap-2">
                         {formula.variables.map((v) => (
                           <div key={v.key} className="flex items-center gap-1">
                             <label className="text-xs text-muted-foreground">{v.label}=</label>
                             <Input
                               placeholder={v.placeholder ?? v.key}
-                              className="h-8 w-20 text-sm font-mono"
+                              className="h-9 w-20 font-mono text-sm"
                               value={templateVars[v.key] ?? ''}
                               onChange={(e) => setTemplateVars((prev) => ({ ...prev, [v.key]: e.target.value }))}
                             />
                           </div>
                         ))}
                         <Button
+                          type="button"
                           size="sm"
                           variant="secondary"
-                          className="h-8 text-xs"
+                          className="h-9 text-xs"
                           onClick={() => {
                             const built = buildLatexFromTemplate(formula.latex, templateVars);
                             if (built.trim()) {
@@ -730,17 +809,18 @@ export function FormulaInserter({
                     </div>
                   ) : (
                     <div
-                      className="flex items-center justify-between gap-4 p-2.5 rounded-md border border-muted-foreground/15 hover:bg-muted/40 cursor-pointer transition-colors"
+                      className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-border/60 bg-card/40 p-3 shadow-sm transition-colors hover:border-primary/25 hover:bg-accent/30 dark:bg-card/25"
                       onClick={() => setLatex(formula.latex)}
                     >
-                      <span className="text-sm font-medium shrink-0">{formula.label}</span>
-                      <div className="flex-1 overflow-hidden text-right min-h-[28px] flex items-center justify-end">
+                      <span className="shrink-0 text-sm font-semibold">{formula.label}</span>
+                      <div className="flex min-h-[32px] flex-1 items-center justify-end overflow-hidden text-right">
                         {open && <FormulaRenderer latex={formula.latex} displayMode={false} />}
                       </div>
                       <Button
+                        type="button"
                         size="sm"
                         variant="secondary"
-                        className="h-7 px-2.5 text-xs shrink-0"
+                        className="h-8 shrink-0 px-3 text-xs"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleInsert(formula.latex);
@@ -754,22 +834,26 @@ export function FormulaInserter({
               ))}
             </div>
             {latex && (
-              <div className="mt-3 p-2.5 rounded-md border border-muted-foreground/15 bg-muted/20 min-h-[44px] flex items-center justify-center">
-                <FormulaRenderer latex={latex} displayMode={displayMode} />
+              <div className="mt-4 rounded-xl border border-dashed border-border/80 bg-muted/20 p-4">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live preview</p>
+                <div className="flex min-h-[48px] items-center justify-center">
+                  <FormulaRenderer latex={latex} displayMode={displayMode} />
+                </div>
               </div>
             )}
           </TabsContent>
         </Tabs>
+      </div>
 
-        <DialogFooter className="gap-2 pt-3 border-t">
-          <Button variant="outline" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-          <Button onClick={() => handleInsert()} disabled={!latex.trim()}>
-            {onUpdate ? 'Update equation' : 'Insert equation'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
+      <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-muted/10 px-5 py-4 dark:bg-muted/5">
+        <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+        <Button type="button" onClick={() => handleInsert()} disabled={!latex.trim()}>
+          {onUpdate ? 'Update equation' : 'Insert equation'}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   );
 
   return (

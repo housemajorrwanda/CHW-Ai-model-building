@@ -1,6 +1,10 @@
+import { useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatsCard } from '@/components/dashboard/StatsCard';
 import { RecentSubmissions } from '@/components/dashboard/RecentSubmissions';
+import { StudentRecentActivity } from '@/components/dashboard/StudentRecentActivity';
+import { partitionStudentExams } from '@/lib/studentExamBuckets';
+import { coursesAPI, examsAPI } from '@/lib/api';
 import {
   BookOpen,
   FileText,
@@ -11,6 +15,7 @@ import {
   GraduationCap,
   Sparkles,
   PlusCircle,
+  CheckCircle2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -19,6 +24,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
+import type { Course, DashboardStats, Submission } from '@/types';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -26,36 +32,84 @@ export default function Dashboard() {
   // Fetch dashboard stats
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard', 'stats'],
-    queryFn: () => api.dashboard.getStats(),
+    queryFn: () => api.dashboard.getStats() as Promise<DashboardStats>,
     enabled: !!user,
   });
 
   // Fetch recent submissions
   const { data: submissionsData, isLoading: submissionsLoading } = useQuery({
     queryKey: ['submissions'],
-    queryFn: () => api.submissions.getAll(),
+    queryFn: () => api.submissions.getAll() as Promise<Submission[]>,
     enabled: !!user,
   });
 
   // Fetch courses
   const { data: coursesData, isLoading: coursesLoading } = useQuery({
     queryKey: ['courses'],
-    queryFn: () => api.courses.getAll(),
+    queryFn: () => api.courses.getAll() as Promise<Course[]>,
     enabled: !!user && user.role === 'professor',
+  });
+
+  const { data: enrolledCourses = [], isLoading: enrolledLoading } = useQuery({
+    queryKey: ['courses', 'enrolled'],
+    queryFn: () => coursesAPI.getEnrolled() as Promise<Course[]>,
+    enabled: !!user && user.role === 'student',
+  });
+
+  const { data: studentExams = [], isLoading: studentExamsLoading } = useQuery({
+    queryKey: ['exams', 'student-portal'],
+    queryFn: () => examsAPI.getAll() as Promise<any[]>,
+    enabled: !!user && user.role === 'student',
   });
 
   const recentSubmissions = submissionsData?.slice(0, 5) || [];
   const courses = coursesData || [];
+
+  const studentBuckets = useMemo(() => {
+    if (user?.role !== 'student' || !submissionsData) {
+      return { available: [] as any[], submitted: [] as any[], graded: [] as any[] };
+    }
+    return partitionStudentExams(studentExams, submissionsData as any[]);
+  }, [user?.role, studentExams, submissionsData]);
+
+  const examTitleById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const e of studentExams) {
+      if (e?.id && e?.title) m.set(e.id, e.title as string);
+    }
+    return m;
+  }, [studentExams]);
+
+  const studentReleasedAvg = useMemo(() => {
+    if (user?.role !== 'student' || !submissionsData) return null;
+    const approved = (submissionsData as any[]).filter(
+      (s) => s.status === 'approved' && s.totalScore != null && s.maxScore > 0
+    );
+    if (approved.length === 0) return null;
+    return Math.round(
+      approved.reduce((sum, s) => sum + (s.totalScore / s.maxScore) * 100, 0) / approved.length
+    );
+  }, [user?.role, submissionsData]);
 
   return (
       <div className="mx-auto max-w-7xl space-y-8 pb-8">
         {/* Header */}
         <header
           className={cn(
-            'rounded-2xl border border-violet-200/70 bg-gradient-to-br from-violet-50/90 via-white to-indigo-50/40 p-6 shadow-sm dark:from-violet-950/40 dark:via-card dark:to-indigo-950/20 dark:border-violet-900/50 sm:p-8'
+            'rounded-2xl border p-6 shadow-sm sm:p-8',
+            user?.role === 'student'
+              ? 'border-teal-200/60 bg-gradient-to-br from-teal-50/80 via-white to-cyan-50/40 dark:border-teal-900/40 dark:from-teal-950/30 dark:via-card dark:to-cyan-950/20'
+              : 'border-violet-200/70 bg-gradient-to-br from-violet-50/90 via-white to-indigo-50/40 dark:from-violet-950/40 dark:via-card dark:to-indigo-950/20 dark:border-violet-900/50'
           )}
         >
-          <p className="text-xs font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-400">
+          <p
+            className={cn(
+              'text-xs font-semibold uppercase tracking-wider',
+              user?.role === 'student'
+                ? 'text-teal-800 dark:text-teal-300'
+                : 'text-violet-700 dark:text-violet-400'
+            )}
+          >
             {user?.role === 'professor' ? 'Instructor workspace' : user?.role === 'student' ? 'Student home' : 'Admin'}
           </p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
@@ -65,43 +119,80 @@ export default function Dashboard() {
             {user?.role === 'professor'
               ? 'Track courses, submissions, and grading at a glance.'
               : user?.role === 'student'
-              ? "Here's what's happening with your exams and results."
+              ? 'See what needs your attention, what is being graded, and scores your instructors have released.'
               : 'System overview and quick access to tools.'}
           </p>
         </header>
 
         {/* Stats Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatsCard
-            title="Total Courses"
-            value={statsLoading ? '...' : stats?.totalCourses || 0}
-            icon={BookOpen}
-            variant="primary"
-          />
-          <StatsCard
-            title="Total Exams"
-            value={statsLoading ? '...' : stats?.totalExams || 0}
-            icon={FileText}
-            variant="accent"
-          />
-          <StatsCard
-            title="Submissions"
-            value={statsLoading ? '...' : stats?.totalSubmissions || 0}
-            icon={ClipboardList}
-          />
-          <StatsCard
-            title="Pending Grading"
-            value={statsLoading ? '...' : stats?.pendingGrading || 0}
-            icon={Clock}
-            variant="warning"
-          />
-        </div>
+        {user?.role === 'student' ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <StatsCard
+              title="My courses"
+              value={enrolledLoading ? '…' : enrolledCourses.length}
+              icon={BookOpen}
+              variant="softRose"
+            />
+            <StatsCard
+              title="Exams to complete"
+              value={studentExamsLoading ? '…' : studentBuckets.available.length}
+              icon={FileText}
+              variant="softApricot"
+            />
+            <StatsCard
+              title="Under review"
+              value={studentExamsLoading ? '…' : studentBuckets.submitted.length}
+              icon={Clock}
+              variant="softLilac"
+            />
+            <StatsCard
+              title="Released results"
+              value={studentExamsLoading ? '…' : studentBuckets.graded.length}
+              icon={CheckCircle2}
+              variant="softSky"
+            />
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <StatsCard
+              title="Total Courses"
+              value={statsLoading ? '...' : stats?.totalCourses || 0}
+              icon={BookOpen}
+              variant="primary"
+            />
+            <StatsCard
+              title="Total Exams"
+              value={statsLoading ? '...' : stats?.totalExams || 0}
+              icon={FileText}
+              variant="accent"
+            />
+            <StatsCard
+              title="Submissions"
+              value={statsLoading ? '...' : stats?.totalSubmissions || 0}
+              icon={ClipboardList}
+            />
+            <StatsCard
+              title="Pending Grading"
+              value={statsLoading ? '...' : stats?.pendingGrading || 0}
+              icon={Clock}
+              variant="warning"
+            />
+          </div>
+        )}
 
         {/* Main Content Grid */}
         <div className="grid gap-8 lg:grid-cols-3">
           {/* Recent Submissions - Takes 2 columns */}
           <div className="lg:col-span-2">
-            {submissionsLoading ? (
+            {user?.role === 'student' ? (
+              submissionsLoading ? (
+                <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-dashed border-teal-200/80 bg-teal-50/20 dark:border-teal-900/50 dark:bg-teal-950/20">
+                  <p className="text-sm font-medium text-muted-foreground">Loading activity…</p>
+                </div>
+              ) : (
+                <StudentRecentActivity submissions={recentSubmissions} examTitleById={examTitleById} />
+              )
+            ) : submissionsLoading ? (
               <div className="flex min-h-[200px] items-center justify-center rounded-2xl border-2 border-dashed border-violet-200 bg-violet-50/30 dark:border-violet-900 dark:bg-violet-950/20">
                 <p className="text-sm font-medium text-muted-foreground">Loading submissions…</p>
               </div>
@@ -113,25 +204,27 @@ export default function Dashboard() {
           {/* Right Column */}
           <div className="space-y-6">
             {/* Average Score Card */}
-            {stats?.averageScore != null && (
+            {(user?.role === 'student' ? studentReleasedAvg != null : stats?.averageScore != null) && (
               <Card className="animate-fade-up overflow-hidden rounded-2xl border-emerald-200/70 bg-gradient-to-br from-emerald-50/80 to-teal-50/30 shadow-sm dark:border-emerald-900/50 dark:from-emerald-950/30">
                 <CardHeader className="pb-2">
                   <CardTitle className="flex items-center gap-2 text-base font-semibold text-emerald-900 dark:text-emerald-100">
                     <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600 text-white shadow-sm">
                       <TrendingUp className="h-4 w-4" />
                     </span>
-                    Average score
+                    {user?.role === 'student' ? 'Average (released)' : 'Average score'}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="mb-3 flex items-end gap-2">
                     <span className="text-4xl font-bold tabular-nums tracking-tight">
-                      {stats.averageScore.toFixed(1)}
+                      {user?.role === 'student'
+                        ? studentReleasedAvg!.toFixed(0)
+                        : stats!.averageScore!.toFixed(1)}
                     </span>
                     <span className="mb-1 text-muted-foreground">%</span>
                   </div>
                   <Progress
-                    value={stats.averageScore}
+                    value={user?.role === 'student' ? studentReleasedAvg! : stats!.averageScore!}
                     className="h-3 border border-emerald-200/50 bg-white/70 dark:border-emerald-900/50 dark:bg-emerald-950/40"
                   />
                 </CardContent>
@@ -171,22 +264,32 @@ export default function Dashboard() {
                 {user?.role === 'student' && (
                   <>
                     <Button
-                      className="h-12 w-full justify-start gap-2 bg-violet-600 font-semibold shadow-md hover:bg-violet-700"
+                      className="h-12 w-full justify-start gap-2 rounded-xl bg-teal-600 font-semibold shadow-md hover:bg-teal-700"
                       asChild
                     >
-                      <Link to="/submit">
+                      <Link to="/my-exams">
                         <ClipboardList className="h-4 w-4" />
-                        Submit exam
+                        My exams
                       </Link>
                     </Button>
                     <Button
                       variant="outline"
-                      className="h-12 w-full justify-start gap-2 border-2 border-violet-200 font-semibold"
+                      className="h-12 w-full justify-start gap-2 rounded-xl border-2 border-teal-200 font-semibold hover:bg-teal-50 dark:border-teal-800 dark:hover:bg-teal-950/40"
                       asChild
                     >
                       <Link to="/my-results">
-                        <TrendingUp className="h-4 w-4 text-violet-600" />
+                        <TrendingUp className="h-4 w-4 text-teal-700 dark:text-teal-400" />
                         View results
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-12 w-full justify-start gap-2 rounded-xl border border-border font-medium"
+                      asChild
+                    >
+                      <Link to="/browse-courses">
+                        <BookOpen className="h-4 w-4 text-muted-foreground" />
+                        Browse courses
                       </Link>
                     </Button>
                   </>
@@ -231,7 +334,7 @@ export default function Dashboard() {
                       </Button>
                     </div>
                   ) : (
-                    courses.slice(0, 4).map((course: any) => {
+                    courses.slice(0, 4).map((course) => {
                       const n = course.students?.length ?? 0;
                       return (
                         <Link

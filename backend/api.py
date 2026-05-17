@@ -10,10 +10,11 @@ from sqlalchemy import func
 from typing import List, Optional, Tuple, Any
 import os
 import re
+import math
 import logging
 from pathlib import Path
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, timezone
 import jwt
 import json
 
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 from database import get_db, init_db, engine
 import models
 import schemas
+import notifications_service
 from math_grader import Step as GraderStep
 from hybrid_grader import HybridGrader
 from ocr.ocr_pipeline import OCRProcessor
@@ -76,8 +78,107 @@ app.mount(
     name="uploads",
 )
 
-# Initialize OCR processor
-ocr_processor = OCRProcessor(language="en", dpi=300, psm=6, use_easyocr=False)
+# OCR: EasyOCR is optional (large deps). Tesseract alone is weak on handwriting; for local dev set
+# USE_EASYOCR=1 and `pip install easyocr` for better scan accuracy.
+_use_easyocr = os.getenv("USE_EASYOCR", "").lower() in ("1", "true", "yes")
+ocr_processor = OCRProcessor(language="en", dpi=360, psm=6, use_easyocr=_use_easyocr)
+logger.info(
+    "OCR processor: easyocr=%s (set USE_EASYOCR=1 and install easyocr for handwriting scans)",
+    _use_easyocr,
+)
+if _use_easyocr and not ocr_processor.use_easyocr:
+    logger.warning(
+        "USE_EASYOCR is set but EasyOCR did not load (missing package or init failed); using Tesseract only."
+    )
+
+
+@app.get("/api/ocr/status")
+def ocr_status():
+    """
+    Report which OCR engines are wired up. Surfaced in the take-exam UI so the
+    student knows whether handwriting will be read by a local TrOCR model, a
+    cloud math/handwriting provider, or just the basic Tesseract fallback.
+    """
+    cloud = getattr(ocr_processor, "cloud", None)
+    cloud_status = cloud.status() if cloud else {
+        "active": None,
+        "available": [],
+        "configured": [],
+    }
+    trocr_enabled = getattr(ocr_processor, "trocr", None) is not None
+    trocr_runtime = bool(getattr(ocr_processor, "trocr_runtime_available", False))
+    lh: dict = {}
+    if trocr_runtime:
+        try:
+            from ocr.local_handwriting import local_handwriting_engine_status
+
+            lh = local_handwriting_engine_status()
+        except Exception:
+            lh = {}
+    prose_model = lh.get("proseModel") if trocr_enabled else None
+    return {
+        "cloud": cloud_status,
+        "localTrocr": {
+            "enabled": trocr_enabled,
+            "runtimeAvailable": trocr_runtime,
+            # `model` kept for older frontends — same as prose TrOCR checkpoint.
+            "model": prose_model,
+            "proseModel": prose_model,
+            "mathTrocrModel": lh.get("mathTrocrModel") if trocr_enabled else None,
+            "pix2texOptIn": bool(lh.get("pix2texOptIn")),
+            "pix2texReady": bool(lh.get("pix2texImportable")),
+            "mathEnsembleMode": lh.get("mathEnsembleMode") if trocr_enabled else None,
+        },
+        "localEasyOcr": bool(ocr_processor.use_easyocr),
+        "tesseract": True,
+        # Friendly description for the UI; safe to show to students.
+        "summary": _ocr_status_summary(
+            cloud_status,
+            trocr_enabled,
+            trocr_runtime,
+            ocr_processor.use_easyocr,
+            lh if trocr_enabled else {},
+        ),
+    }
+
+
+def _ocr_status_summary(
+    cloud_status: dict,
+    trocr_enabled: bool,
+    trocr_runtime: bool,
+    easy_loaded: bool,
+    local_hw: Optional[dict] = None,
+) -> str:
+    active = cloud_status.get("active")
+    if active == "mathpix":
+        return "Handwritten math is read by Mathpix (cloud math/handwriting OCR)."
+    if active == "gcv":
+        return "Handwriting is read by Google Cloud Vision (cloud OCR)."
+    if active == "azure":
+        return "Handwriting is read by Azure Read (cloud OCR)."
+    if trocr_enabled:
+        lh = local_hw or {}
+        prose = lh.get("proseModel") or "microsoft/trocr-small-handwritten"
+        math_m = lh.get("mathTrocrModel") or "fhswf/TrOCR_Math_handwritten"
+        mode = lh.get("mathEnsembleMode") or "full"
+        tail = (
+            " When you submit, each line is scored across prose + math models; "
+            "set OCR_MATH_HEURISTIC_ONLY=1 on slow servers to skip math on non-math lines."
+            if mode == "full"
+            else " Math handwriting (fhswf) runs only on lines that look like math or noisy OCR."
+        )
+        if lh.get("pix2texOptIn") and lh.get("pix2texImportable"):
+            tail += " pix2tex (third pass) is enabled."
+        return (
+            "Handwriting uses local TrOCR: prose model "
+            f"({prose}) plus math handwriting ({math_m}).{tail} "
+            "Quality beats Tesseract alone; difficult scans may still need review."
+        )
+    # No handwriting engine is active. We deliberately do not surface this to
+    # students — the routing preview + page images already give them enough to
+    # verify their submission. The status endpoint still returns the raw flags
+    # so admins can debug it; the UI just hides the banner.
+    return ""
 
 
 def _include_grading_in_submission_payload(submission: models.Submission, viewer: models.User) -> bool:
@@ -414,6 +515,12 @@ def _optional_str(value) -> Optional[str]:
 
 def user_to_response(user: models.User) -> schemas.UserResponse:
     """Convert User model to UserResponse schema"""
+    from notifications_service import (
+        exam_offset_hours_for_user,
+        exam_reminders_enabled,
+        teaching_reminders_enabled,
+    )
+
     return schemas.UserResponse(
         id=user.id,
         name=user.name,
@@ -428,6 +535,9 @@ def user_to_response(user: models.User) -> schemas.UserResponse:
         gender=user.gender,
         studentId=user.student_id,
         dateOfBirth=user.date_of_birth,
+        remindExamDeadlinesEnabled=exam_reminders_enabled(user),
+        remindExamOffsetsHours=exam_offset_hours_for_user(user),
+        remindTeachingDeadlinesEnabled=teaching_reminders_enabled(user),
     )
 
 
@@ -540,6 +650,104 @@ def get_me(current_user: models.User = Depends(get_current_user)):
     return user_to_response(current_user)
 
 
+@app.get("/api/notifications", response_model=schemas.NotificationFeedResponse)
+def list_notifications(
+    limit: int = 80,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """In-app notifications plus computed reminders (exam deadlines, enrollments, approvals)."""
+    if limit > 200:
+        limit = 200
+    if limit < 1:
+        limit = 1
+    items, badge = notifications_service.build_feed(db, current_user, limit=limit)
+    return schemas.NotificationFeedResponse(
+        items=[schemas.NotificationFeedItem(**item) for item in items],
+        unreadCount=badge,
+    )
+
+
+@app.patch("/api/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mark a single persisted notification as read (reminder rows are not stored)."""
+    if notification_id.startswith("reminder:"):
+        raise HTTPException(status_code=400, detail="Reminders cannot be marked read")
+    ok = notifications_service.mark_read(db, current_user, notification_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/notifications/read-all")
+def mark_all_notifications_read(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mark all persisted notifications as read for the current user."""
+    marked = notifications_service.mark_all_read(db, current_user)
+    db.commit()
+    return {"marked": marked}
+
+
+@app.get("/api/reminders/due", response_model=List[schemas.ScheduledReminderDueItem])
+def get_due_scheduled_reminders(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Personal reminders that are due now (shown in a separate alert, not the bell list)."""
+    raw = notifications_service.list_due_scheduled_reminders(db, current_user)
+    return [schemas.ScheduledReminderDueItem(**row) for row in raw]
+
+
+@app.post("/api/reminders/schedule")
+def schedule_personal_reminder(
+    body: schemas.ScheduleReminderRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Save a follow-up reminder (date/time, optional repeat) tied to a feed item."""
+    ra = body.remindAt
+    if ra.tzinfo is None:
+        ra = ra.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if ra <= now - timedelta(minutes=1):
+        raise HTTPException(status_code=400, detail="Choose a time in the future")
+    r = notifications_service.schedule_user_reminder(
+        db,
+        current_user,
+        source_key=body.sourceKey,
+        title=body.title,
+        body=body.body,
+        link=body.link,
+        user_note=body.userNote,
+        remind_at=ra,
+        repeat=body.repeat,
+    )
+    db.commit()
+    db.refresh(r)
+    return {"id": r.id}
+
+
+@app.post("/api/reminders/scheduled/{reminder_id}/acknowledge")
+def acknowledge_personal_reminder(
+    reminder_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Dismiss a due scheduled reminder, or advance it when repeat is enabled."""
+    ok = notifications_service.acknowledge_scheduled_reminder(db, current_user, reminder_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    db.commit()
+    return {"ok": True}
+
+
 @app.put("/api/auth/me", response_model=schemas.UserResponse)
 def update_me(
     body: schemas.UserProfileUpdate,
@@ -587,6 +795,16 @@ def update_me(
         current_user.student_id = _optional_str(_prof["studentId"])
     if "dateOfBirth" in _prof:
         current_user.date_of_birth = _prof["dateOfBirth"]
+
+    if "remindExamDeadlinesEnabled" in _prof:
+        current_user.remind_exam_deadlines_enabled = bool(_prof["remindExamDeadlinesEnabled"])
+    if "remindExamOffsetsHours" in _prof:
+        import json as _json
+
+        hours = _prof["remindExamOffsetsHours"]
+        current_user.remind_exam_offsets_hours = _json.dumps(hours)
+    if "remindTeachingDeadlinesEnabled" in _prof:
+        current_user.remind_teaching_deadlines_enabled = bool(_prof["remindTeachingDeadlinesEnabled"])
 
     db.add(current_user)
     db.commit()
@@ -895,6 +1113,14 @@ def request_enrollment(
         status=models.EnrollmentStatus.PENDING
     )
     db.add(enrollment)
+    notifications_service.push_notification(
+        db,
+        user_id=course.professor_id,
+        kind="enrollment_requested",
+        title="New enrollment request",
+        body=f"{current_user.name} requested to join {course.name} ({course.code}).",
+        link=f"/courses/{course_id}",
+    )
     db.commit()
     
     return {"message": "Enrollment request submitted"}
@@ -924,6 +1150,14 @@ def approve_enrollment(
     
     enrollment.status = models.EnrollmentStatus.APPROVED
     enrollment.enrolled_at = datetime.utcnow()
+    notifications_service.push_notification(
+        db,
+        user_id=enrollment.student_id,
+        kind="enrollment_approved",
+        title=f"Enrolled in {course.name}",
+        body="You can now access published exams for this course.",
+        link="/my-exams",
+    )
     db.commit()
     
     return {"message": "Student approved"}
@@ -952,6 +1186,14 @@ def reject_enrollment(
         raise HTTPException(status_code=404, detail="Enrollment not found")
     
     enrollment.status = models.EnrollmentStatus.REJECTED
+    notifications_service.push_notification(
+        db,
+        user_id=enrollment.student_id,
+        kind="enrollment_rejected",
+        title=f"Enrollment update: {course.name}",
+        body="Your request to join this course was not approved.",
+        link="/browse-courses",
+    )
     db.commit()
     
     return {"message": "Student rejected"}
@@ -984,6 +1226,382 @@ def remove_student(
     
     return {"message": "Student removed from course"}
 
+
+def _user_can_access_course_announcements(
+    db: Session, user: models.User, course: models.Course
+) -> bool:
+    if user.role == models.UserRole.ADMIN:
+        return True
+    if user.role == models.UserRole.PROFESSOR and course.professor_id == user.id:
+        return True
+    if user.role == models.UserRole.STUDENT:
+        row = (
+            db.query(models.CourseEnrollment)
+            .filter(
+                models.CourseEnrollment.course_id == course.id,
+                models.CourseEnrollment.student_id == user.id,
+                models.CourseEnrollment.status == models.EnrollmentStatus.APPROVED,
+            )
+            .first()
+        )
+        return row is not None
+    return False
+
+
+def _schema_reaction_kind_to_model(kind: schemas.AnnouncementReactionKind) -> models.AnnouncementReactionKind:
+    return models.AnnouncementReactionKind(kind.value)
+
+
+def _announcement_to_schema(
+    ann: models.CourseAnnouncement, viewer: models.User
+) -> schemas.AnnouncementResponse:
+    counts = {"like": 0, "improve": 0, "implement": 0}
+    my_like = my_improve = my_implement = False
+    for r in ann.reactions:
+        k = r.kind.value if hasattr(r.kind, "value") else str(r.kind)
+        if k in counts:
+            counts[k] += 1
+        if r.user_id == viewer.id:
+            if k == "like":
+                my_like = True
+            elif k == "improve":
+                my_improve = True
+            elif k == "implement":
+                my_implement = True
+    comments_sorted = sorted(
+        ann.comments,
+        key=lambda c: c.created_at or datetime(1970, 1, 1, tzinfo=timezone.utc),
+    )
+    comment_payloads = [
+        schemas.AnnouncementCommentResponse(
+            id=c.id,
+            authorId=c.author_id,
+            authorName=c.author.name,
+            body=c.body,
+            createdAt=c.created_at,
+        )
+        for c in comments_sorted
+    ]
+    return schemas.AnnouncementResponse(
+        id=ann.id,
+        courseId=ann.course_id,
+        authorId=ann.author_id,
+        authorName=ann.author.name,
+        title=ann.title,
+        body=ann.body,
+        pinned=bool(ann.pinned),
+        createdAt=ann.created_at,
+        likeCount=counts["like"],
+        improveCount=counts["improve"],
+        implementCount=counts["implement"],
+        commentCount=len(comment_payloads),
+        myLiked=my_like,
+        myImprove=my_improve,
+        myImplement=my_implement,
+        comments=comment_payloads,
+    )
+
+
+def _load_announcement_for_course(
+    db: Session, course_id: str, announcement_id: str
+) -> Optional[models.CourseAnnouncement]:
+    return (
+        db.query(models.CourseAnnouncement)
+        .filter(
+            models.CourseAnnouncement.id == announcement_id,
+            models.CourseAnnouncement.course_id == course_id,
+        )
+        .options(
+            joinedload(models.CourseAnnouncement.author),
+            selectinload(models.CourseAnnouncement.comments).joinedload(
+                models.AnnouncementComment.author
+            ),
+            selectinload(models.CourseAnnouncement.reactions),
+        )
+        .first()
+    )
+
+
+@app.get(
+    "/api/courses/{course_id}/announcements",
+    response_model=List[schemas.AnnouncementResponse],
+)
+def list_course_announcements(
+    course_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not _user_can_access_course_announcements(db, current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized to view announcements for this course")
+
+    rows = (
+        db.query(models.CourseAnnouncement)
+        .filter(models.CourseAnnouncement.course_id == course_id)
+        .options(
+            joinedload(models.CourseAnnouncement.author),
+            selectinload(models.CourseAnnouncement.comments).joinedload(
+                models.AnnouncementComment.author
+            ),
+            selectinload(models.CourseAnnouncement.reactions),
+        )
+        .order_by(models.CourseAnnouncement.pinned.desc(), models.CourseAnnouncement.created_at.desc())
+        .all()
+    )
+    return [_announcement_to_schema(a, current_user) for a in rows]
+
+
+@app.post(
+    "/api/courses/{course_id}/announcements",
+    response_model=schemas.AnnouncementResponse,
+)
+def create_course_announcement(
+    course_id: str,
+    payload: schemas.AnnouncementCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role not in (models.UserRole.PROFESSOR, models.UserRole.ADMIN):
+        raise HTTPException(status_code=403, detail="Only instructors can post announcements")
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.professor_id != current_user.id and current_user.role != models.UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized to post in this course")
+
+    ann = models.CourseAnnouncement(
+        course_id=course_id,
+        author_id=current_user.id,
+        title=payload.title.strip(),
+        body=payload.body.strip(),
+        pinned=payload.pinned,
+    )
+    db.add(ann)
+    db.flush()
+
+    enrollments = (
+        db.query(models.CourseEnrollment)
+        .filter(
+            models.CourseEnrollment.course_id == course_id,
+            models.CourseEnrollment.status == models.EnrollmentStatus.APPROVED,
+        )
+        .all()
+    )
+    preview = (ann.title[:120] + "…") if len(ann.title) > 120 else ann.title
+    for enr in enrollments:
+        notifications_service.push_notification(
+            db,
+            user_id=enr.student_id,
+            kind="course_announcement",
+            title=f"New announcement: {course.name}",
+            body=preview,
+            link=f"/courses/{course_id}/announcements",
+        )
+    db.commit()
+    ann = _load_announcement_for_course(db, course_id, ann.id)
+    return _announcement_to_schema(ann, current_user)
+
+
+@app.patch(
+    "/api/courses/{course_id}/announcements/{announcement_id}",
+    response_model=schemas.AnnouncementResponse,
+)
+def update_course_announcement(
+    course_id: str,
+    announcement_id: str,
+    payload: schemas.AnnouncementUpdate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role not in (models.UserRole.PROFESSOR, models.UserRole.ADMIN):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.professor_id != current_user.id and current_user.role != models.UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    ann = (
+        db.query(models.CourseAnnouncement)
+        .filter(
+            models.CourseAnnouncement.id == announcement_id,
+            models.CourseAnnouncement.course_id == course_id,
+        )
+        .first()
+    )
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    if payload.title is not None:
+        ann.title = payload.title.strip()
+    if payload.body is not None:
+        ann.body = payload.body.strip()
+    if payload.pinned is not None:
+        ann.pinned = payload.pinned
+    db.commit()
+    ann = _load_announcement_for_course(db, course_id, announcement_id)
+    return _announcement_to_schema(ann, current_user)
+
+
+@app.delete("/api/courses/{course_id}/announcements/{announcement_id}")
+def delete_course_announcement(
+    course_id: str,
+    announcement_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role not in (models.UserRole.PROFESSOR, models.UserRole.ADMIN):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.professor_id != current_user.id and current_user.role != models.UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    ann = (
+        db.query(models.CourseAnnouncement)
+        .filter(
+            models.CourseAnnouncement.id == announcement_id,
+            models.CourseAnnouncement.course_id == course_id,
+        )
+        .first()
+    )
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    db.delete(ann)
+    db.commit()
+    return {"message": "Announcement deleted"}
+
+
+@app.post(
+    "/api/courses/{course_id}/announcements/{announcement_id}/reactions/toggle",
+    response_model=schemas.AnnouncementResponse,
+)
+def toggle_announcement_reaction(
+    course_id: str,
+    announcement_id: str,
+    payload: schemas.AnnouncementReactionToggle,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not _user_can_access_course_announcements(db, current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    ann = (
+        db.query(models.CourseAnnouncement)
+        .filter(
+            models.CourseAnnouncement.id == announcement_id,
+            models.CourseAnnouncement.course_id == course_id,
+        )
+        .first()
+    )
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+
+    mk = _schema_reaction_kind_to_model(payload.kind)
+    existing = (
+        db.query(models.AnnouncementReaction)
+        .filter(
+            models.AnnouncementReaction.announcement_id == announcement_id,
+            models.AnnouncementReaction.user_id == current_user.id,
+            models.AnnouncementReaction.kind == mk,
+        )
+        .first()
+    )
+    if existing:
+        db.delete(existing)
+    else:
+        db.add(
+            models.AnnouncementReaction(
+                announcement_id=announcement_id,
+                user_id=current_user.id,
+                kind=mk,
+            )
+        )
+    db.commit()
+    ann = _load_announcement_for_course(db, course_id, announcement_id)
+    return _announcement_to_schema(ann, current_user)
+
+
+@app.post(
+    "/api/courses/{course_id}/announcements/{announcement_id}/comments",
+    response_model=schemas.AnnouncementResponse,
+)
+def add_announcement_comment(
+    course_id: str,
+    announcement_id: str,
+    payload: schemas.AnnouncementCommentCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not _user_can_access_course_announcements(db, current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    ann = (
+        db.query(models.CourseAnnouncement)
+        .filter(
+            models.CourseAnnouncement.id == announcement_id,
+            models.CourseAnnouncement.course_id == course_id,
+        )
+        .first()
+    )
+    if not ann:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+
+    c = models.AnnouncementComment(
+        announcement_id=announcement_id,
+        author_id=current_user.id,
+        body=payload.body.strip(),
+    )
+    db.add(c)
+    db.commit()
+    ann = _load_announcement_for_course(db, course_id, announcement_id)
+    return _announcement_to_schema(ann, current_user)
+
+
+@app.delete(
+    "/api/courses/{course_id}/announcements/{announcement_id}/comments/{comment_id}",
+    response_model=schemas.AnnouncementResponse,
+)
+def delete_announcement_comment(
+    course_id: str,
+    announcement_id: str,
+    comment_id: str,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if not _user_can_access_course_announcements(db, current_user, course):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    comment = (
+        db.query(models.AnnouncementComment)
+        .filter(
+            models.AnnouncementComment.id == comment_id,
+            models.AnnouncementComment.announcement_id == announcement_id,
+        )
+        .first()
+    )
+    if not comment:
+        raise HTTPException(status_code=404, detail="Comment not found")
+
+    is_moderator = current_user.role == models.UserRole.ADMIN or course.professor_id == current_user.id
+    if comment.author_id != current_user.id and not is_moderator:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+
+    db.delete(comment)
+    db.commit()
+    ann = _load_announcement_for_course(db, course_id, announcement_id)
+    return _announcement_to_schema(ann, current_user)
 
 
 @app.get("/api/exams", response_model=List[schemas.ExamResponse])
@@ -1051,6 +1669,9 @@ def get_exams(
                     finalAnswerLatex=question.final_answer_latex or "",
                     questionType=getattr(question, 'question_type', 'standard'),
                     richContent=rich_content_val,
+                    outlineTitle=_display_safe_text(question.outline_title)
+                    if getattr(question, "outline_title", None)
+                    else None,
                     outlineLevel=getattr(question, 'outline_level', 1),
                     parentQuestionId=getattr(question, 'parent_question_id', None),
                     subQuestions=[],
@@ -1116,6 +1737,7 @@ def create_exam(
             final_answer_latex=question_data.finalAnswerLatex,
             question_type=question_data.questionType,
             rich_content=json.dumps(question_data.richContent) if question_data.richContent else None,
+            outline_title=(question_data.outlineTitle or "").strip() or None,
             outline_level=question_data.outlineLevel,
             parent_question_id=question_data.parentQuestionId
         )
@@ -1213,6 +1835,7 @@ def create_exam(
                 final_answer_latex=sub_q_data.finalAnswerLatex,
                 question_type=sub_q_data.questionType,
                 rich_content=json.dumps(sub_q_data.richContent) if sub_q_data.richContent else None,
+                outline_title=(sub_q_data.outlineTitle or "").strip() or None,
                 outline_level=sub_q_data.outlineLevel,
                 parent_question_id=new_question.id
             )
@@ -1626,6 +2249,9 @@ def get_exam(
             finalAnswerLatex=question.final_answer_latex or "",
             questionType=getattr(question, 'question_type', 'standard'),
             richContent=rich_content_val,
+            outlineTitle=_display_safe_text(question.outline_title)
+            if getattr(question, "outline_title", None)
+            else None,
             outlineLevel=getattr(question, 'outline_level', 1),
             parentQuestionId=getattr(question, 'parent_question_id', None),
             subQuestions=sub_responses or [],
@@ -1794,6 +2420,7 @@ def update_exam(
             final_answer_latex=question_data.finalAnswerLatex,
             question_type=question_data.questionType,
             rich_content=json.dumps(question_data.richContent) if question_data.richContent else None,
+            outline_title=(question_data.outlineTitle or "").strip() or None,
             outline_level=question_data.outlineLevel,
             parent_question_id=question_data.parentQuestionId
         )
@@ -1896,6 +2523,7 @@ def update_exam(
                 final_answer_latex=sub_q_data.finalAnswerLatex,
                 question_type=sub_q_data.questionType,
                 rich_content=json.dumps(sub_q_data.richContent) if sub_q_data.richContent else None,
+                outline_title=(sub_q_data.outlineTitle or "").strip() or None,
                 outline_level=sub_q_data.outlineLevel,
                 parent_question_id=new_question.id
             )
@@ -1939,6 +2567,23 @@ def publish_exam(
     
     exam.is_published = True
     exam.published_at = datetime.utcnow()
+    enrollments = (
+        db.query(models.CourseEnrollment)
+        .filter(
+            models.CourseEnrollment.course_id == course.id,
+            models.CourseEnrollment.status == models.EnrollmentStatus.APPROVED,
+        )
+        .all()
+    )
+    for en in enrollments:
+        notifications_service.push_notification(
+            db,
+            user_id=en.student_id,
+            kind="exam_published",
+            title=f"New exam published: {exam.title}",
+            body=f"Open it from My Exams — {course.name} ({course.code}).",
+            link=f"/take-exam/{exam.id}",
+        )
     db.commit()
     
     return {"message": "Exam published successfully", "exam_id": exam_id}
@@ -2105,6 +2750,39 @@ def _typed_answer_for_api_display(typed_answer: str) -> Tuple[str, Optional[str]
     return display, latex_content
 
 
+def _polish_submission_answer_fields(
+    extracted_text: Optional[str],
+    extracted_latex: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Parallel display fields for OCR / typed answers (SymPy + cleanup)."""
+    from ocr.ocr_transcript_polish import polish_ocr_for_submission_display
+
+    p = polish_ocr_for_submission_display(extracted_text, extracted_latex)
+    d = (p.display_plain or "").strip() or None
+    m = (p.math_latex or "").strip() or None
+    return d, m
+
+
+def _step_result_response_for_api(step) -> schemas.StepResultResponse:
+    from ocr.ocr_transcript_polish import polish_step_snippet
+
+    rd, rml = polish_step_snippet(step.received)
+    ed, _ = polish_step_snippet(step.expected)
+    return schemas.StepResultResponse(
+        id=step.id,
+        stepNumber=step.step_number,
+        isCorrect=step.is_correct,
+        score=step.score,
+        maxScore=step.max_score,
+        feedback=step.feedback or "",
+        expected=step.expected,
+        received=step.received,
+        expectedDisplay=ed,
+        receivedDisplay=rd,
+        receivedMathLatex=rml,
+    )
+
+
 def _merge_typed_answers_into_responses(
     answers: List[schemas.SubmittedAnswerResponse],
     typed_answers_json: Optional[str],
@@ -2151,6 +2829,8 @@ def _merge_typed_answers_into_responses(
 
         display, latex_vis = _typed_answer_for_api_display(str(typed_answer))
 
+        disp_plain, disp_latex = _polish_submission_answer_fields(display, latex_vis)
+
         if question:
             answers.append(
                 schemas.SubmittedAnswerResponse(
@@ -2158,6 +2838,8 @@ def _merge_typed_answers_into_responses(
                     questionNumber=int(question_number if question_number is not None else question.number),
                     extractedText=display,
                     extractedLatex=latex_vis,
+                    extractedTextDisplay=disp_plain,
+                    extractedMathLatex=disp_latex,
                     extractedSteps=[],
                     gradingResult=None,
                 )
@@ -2174,6 +2856,8 @@ def _merge_typed_answers_into_responses(
                     questionNumber=qnum,
                     extractedText=display,
                     extractedLatex=latex_vis,
+                    extractedTextDisplay=disp_plain,
+                    extractedMathLatex=disp_latex,
                     extractedSteps=[],
                     gradingResult=None,
                 )
@@ -2481,19 +3165,33 @@ def _split_monolithic_solution_text(
     want = {q.number for q in ordered}
     hits: List[Tuple[int, int]] = []
     for m in re.finditer(
-        r"(?mi)^\s*(?:question|q\.?)\s*(\d+)\s*[\.\):]\s+",
+        r"(?mi)^[^\w\n]{0,8}(?:question|q\.?|problem|exercise)\s*(\d{1,2})\s*[\.\):,\-]?(?:\s+|$)",
         text,
     ):
         num = int(m.group(1))
         if num in want:
             hits.append((m.start(), num))
     if len(hits) < 2:
-        for m in re.finditer(r"(?mi)^\s*Q\s*(\d+)\s*[\.\):]?\s+", text):
+        for m in re.finditer(
+            r"(?mi)^[^\w\n]{0,8}Q\s*(\d{1,2})\s*[\.\):,\-]?(?:\s+|$)",
+            text,
+        ):
             num = int(m.group(1))
             if num in want:
                 hits.append((m.start(), num))
     if len(hits) < 2:
-        for m in re.finditer(r"(?mi)^\s*(\d+)\s*[\.\)]\s+\S", text):
+        for m in re.finditer(
+            r"(?mi)^[^\d\n]{0,8}(\d{1,2})\s*[\.\):,\-–]?(?:\s+|$)",
+            text,
+        ):
+            num = int(m.group(1))
+            if num in want:
+                hits.append((m.start(), num))
+    if len(hits) < 2:
+        for m in re.finditer(
+            r"(?mi)^[^\d\n]{0,8}(\d{1,2})\s*[\.\):,\-–]\s*$",
+            text,
+        ):
             num = int(m.group(1))
             if num in want:
                 hits.append((m.start(), num))
@@ -2520,6 +3218,238 @@ def _split_monolithic_solution_text(
     return out
 
 
+def _split_monolithic_by_line_item_numbers(
+    text: str, top_level: List[models.Question]
+) -> Optional[List[str]]:
+    """
+    OCR-friendly split: lines that start with an item number in the exam (1. 2) 3: …).
+    More permissive than _split_monolithic_solution_text; helps when many answers sit on few pages.
+    """
+    ordered = sorted(top_level, key=lambda q: q.number)
+    n = len(ordered)
+    if n <= 1:
+        return None
+    want = {q.number for q in ordered}
+    t = text or ""
+    pat = re.compile(
+        r"(?mi)^[^\d\n]{0,8}(\d{1,2})\s*[\.\):,\-–]?(?:\s+|$)"
+    )
+    hits: List[Tuple[int, int]] = []
+    for m in pat.finditer(t):
+        num = int(m.group(1))
+        if num not in want:
+            continue
+        hits.append((m.start(), num))
+    if len(hits) < 2:
+        return None
+    hits.sort(key=lambda x: x[0])
+    dedup: List[Tuple[int, int]] = []
+    seen_nums: set = set()
+    for pos, num in hits:
+        if num in seen_nums:
+            continue
+        seen_nums.add(num)
+        dedup.append((pos, num))
+    hits = dedup
+    by_num: dict = {}
+    for i, (pos, num) in enumerate(hits):
+        end = hits[i + 1][0] if i + 1 < len(hits) else len(t)
+        by_num[num] = t[pos:end].strip()
+    out: List[str] = []
+    for q in ordered:
+        out.append(by_num.get(q.number, "").strip())
+    if sum(1 for c in out if c) < 2:
+        return None
+    return out
+
+
+def _split_monolithic_by_equal_blocks(text: str, n: int) -> Optional[List[str]]:
+    """
+    Last-resort split: exactly N non-empty paragraphs, or exactly N substantive lines.
+    Helps scanned homework where answers are stacked with blank lines but no 'Q2' labels.
+    If there are more than N paragraphs, the first N-1 stay separate and the rest merge
+    into the last block (common when the final answer has extra blank lines).
+    """
+    if n <= 1:
+        return None
+    t = (text or "").strip()
+    if not t:
+        return None
+    paras = [p.strip() for p in re.split(r"\n{2,}", t) if p.strip()]
+    if len(paras) >= n:
+        if len(paras) == n:
+            return paras
+        return paras[: n - 1] + ["\n\n".join(paras[n - 1 :])]
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    lines = [ln for ln in lines if len(ln) >= 2]
+    if len(lines) == n:
+        return lines
+    return None
+
+
+def _split_monolithic_by_flow_bins(text: str, n: int) -> Optional[List[str]]:
+    """
+    Final fallback for noisy OCR: split ordered lines into N sequential bins.
+    This keeps answer order when explicit question labels are unreadable.
+    """
+    if n <= 1:
+        return None
+    t = (text or "").strip()
+    if not t:
+        return None
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    lines = [ln for ln in lines if len(ln) >= 2]
+    if len(lines) < max(6, n):
+        return None
+    step = max(1, math.ceil(len(lines) / n))
+    out: List[str] = []
+    for i in range(n):
+        start = i * step
+        end = (i + 1) * step if i < n - 1 else len(lines)
+        chunk = "\n".join(lines[start:end]).strip()
+        out.append(chunk)
+    if sum(1 for c in out if c.strip()) < max(2, n // 3):
+        return None
+    return out
+
+
+def _chunk_non_empty_count(chunks: Optional[List[str]]) -> int:
+    if not chunks:
+        return 0
+    return sum(1 for c in chunks if (c or "").strip())
+
+
+def _resolve_monolithic_chunks(
+    text: str, top_level: List[models.Question]
+) -> Tuple[Optional[List[str]], str]:
+    """
+    Try heading-based split first, then equal block/line count. Returns (chunks, method)
+    where method is 'headings', 'blocks', or ''.
+    """
+    ordered = sorted(top_level, key=lambda q: q.number)
+    n = len(ordered)
+    if n <= 1:
+        st = (text or "").strip()
+        return ([st] if st else []), "single"
+    by_headings = _split_monolithic_solution_text(text, ordered)
+    if (
+        by_headings is not None
+        and len(by_headings) == n
+        and _chunk_non_empty_count(by_headings) >= max(2, n // 3)
+    ):
+        return by_headings, "headings"
+    by_line_items = _split_monolithic_by_line_item_numbers(text, ordered)
+    if (
+        by_line_items is not None
+        and len(by_line_items) == n
+        and _chunk_non_empty_count(by_line_items) >= max(2, n // 3)
+    ):
+        return by_line_items, "line_numbers"
+    by_blocks = _split_monolithic_by_equal_blocks(text, n)
+    if (
+        by_blocks is not None
+        and len(by_blocks) == n
+        and _chunk_non_empty_count(by_blocks) >= max(2, n // 3)
+    ):
+        return by_blocks, "blocks"
+    by_flow = _split_monolithic_by_flow_bins(text, n)
+    if by_flow is not None and len(by_flow) == n:
+        return by_flow, "flow_bins"
+    return None, ""
+
+
+def _monolithic_chunks_usable(
+    chunks: Optional[List[str]], tls: List[models.Question]
+) -> bool:
+    if not chunks or len(chunks) != len(tls):
+        return False
+    return any((c or "").strip() for c in chunks)
+
+
+def _strip_scan_app_watermarks(text: str) -> str:
+    """Remove common phone-scanner branding lines from OCR text.
+
+    Handles OCR noise around the branding (stray primes / dots / spaces) — e.g.
+    `scam's'c'a'n'n'er` and `Sca nn ed with CamScanner` both match.
+    """
+    if not text or not text.strip():
+        return text
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        sl = line.strip()
+        if not sl:
+            out_lines.append(line)
+            continue
+        # Collapse OCR noise so brand names match even when primes/dots/spaces
+        # have been sprinkled between every letter by an over-eager detector.
+        normalised = re.sub(r"[^A-Za-z]+", "", sl).lower()
+        if re.search(
+            r"(camscanner|scannedwith|adobescan|tinyscanner|microsoftlens|"
+            r"geniusscan|scannerapp|notescan|officelens|clearscanner)",
+            normalised,
+        ):
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines).strip()
+
+
+def _preview_answer_excerpt(text: Optional[str], max_chars: int = 2400) -> Optional[str]:
+    if not text or not str(text).strip():
+        return None
+    t = str(text).strip()
+    if len(t) <= max_chars:
+        return t
+    return t[: max_chars - 1].rstrip() + "…"
+
+
+def _try_split_answer_pdf_across_questions(
+    pdf_bytes: bytes,
+    pdf_pages: List[str],
+    tls: List[models.Question],
+    ocr: OCRProcessor,
+) -> Tuple[Optional[List[str]], str]:
+    """
+    When an answer PDF is not strictly one top-level question per page, join pages (or
+    OCR the whole file) and split into one chunk per question using headings or blocks.
+    Returns (chunks, method) with method from _resolve_monolithic_chunks, or (None, '').
+    """
+    if len(tls) <= 1:
+        return None, ""
+    joined = "\n\n".join((p or "").strip() for p in pdf_pages).strip()
+    chunks: Optional[List[str]] = None
+    method = ""
+    if joined:
+        chunks, method = _resolve_monolithic_chunks(_strip_scan_app_watermarks(joined), tls)
+    if _monolithic_chunks_usable(chunks, tls) and chunks is not None:
+        chunks = [_strip_scan_app_watermarks(c or "") for c in chunks]
+        return chunks, method
+    chunks, method = None, ""
+    n_pages = len(pdf_pages)
+    n_tl = len(tls)
+    needs_full_pdf_ocr = n_pages == 1 or n_pages != n_tl
+    if not needs_full_pdf_ocr:
+        return None, ""
+    try:
+        # `fast=True`: skip TrOCR here. This function is used by the preview
+        # endpoint where students wait for a routing summary — TrOCR's heavier
+        # per-line CPU inference is reserved for the submit/grade path.
+        ocr_result = ocr.extract_steps_from_file(
+            pdf_bytes, "answers.pdf", fast=True
+        )
+        combined = (ocr_result.combined_text or "").strip()
+    except Exception as ex:
+        logger.warning("OCR for full answer PDF failed: %s", ex)
+        combined = ""
+    if not combined:
+        return None, ""
+    combined = _strip_scan_app_watermarks(combined)
+    chunks, method = _resolve_monolithic_chunks(combined, tls)
+    if _monolithic_chunks_usable(chunks, tls) and chunks is not None:
+        chunks = [_strip_scan_app_watermarks(c or "") for c in chunks]
+        return chunks, method
+    return None, ""
+
+
 def _append_typed_for_question(
     extra: List[dict],
     question: models.Question,
@@ -2534,6 +3464,193 @@ def _append_typed_for_question(
             "questionNumber": question.number,
             "typedAnswer": body,
         }
+    )
+
+
+def _plain_chunk_to_tiptap_html(chunk: str) -> str:
+    """Plain text / OCR segment → minimal HTML for stored typed answers."""
+    from html import escape
+
+    t = (chunk or "").strip()
+    if not t:
+        return ""
+    paras = [p.strip() for p in re.split(r"\n{2,}", t) if p.strip()]
+    if len(paras) <= 1:
+        inner = escape(t).replace("\n", "<br>")
+        return f"<p>{inner}</p>"
+    return "".join(
+        f"<p>{escape(p).replace('\n', '<br>')}</p>" for p in paras
+    )
+
+
+def _typed_split_skip_target(
+    target_id: str,
+    host_top_level_id: str,
+    locked_question_ids: set,
+) -> bool:
+    """Do not overwrite another question's answer row when fanning out a monolithic paste."""
+    if target_id == host_top_level_id:
+        return False
+    return target_id in locked_question_ids
+
+
+def _dispatch_typed_chunk_to_top_level_question(
+    chunk: str,
+    top_q: models.Question,
+    extra: List[dict],
+    host_top_level_id: str,
+    locked_question_ids: set,
+) -> None:
+    """
+    Store one OCR/text segment onto a top-level question (and its sub-parts when present).
+    """
+    chunk = (chunk or "").strip()
+    if not chunk:
+        return
+    subs = _sorted_subquestions(top_q)
+    if subs:
+        parts = _split_multipart_page_text(chunk, len(subs))
+        for sub_q, part in zip(subs, parts):
+            if _typed_split_skip_target(sub_q.id, host_top_level_id, locked_question_ids):
+                continue
+            body = _plain_chunk_to_tiptap_html((part or "").strip())
+            if body:
+                _append_typed_for_question(extra, sub_q, body)
+        return
+    if _typed_split_skip_target(top_q.id, host_top_level_id, locked_question_ids):
+        return
+    _append_typed_for_question(extra, top_q, _plain_chunk_to_tiptap_html(chunk))
+
+
+def _expand_monolithic_typed_payload(
+    answers_list: List[dict],
+    exam: models.Exam,
+) -> List[dict]:
+    """
+    If a student pastes a whole answer sheet into one top-level question's rich-text
+    box (Q1…Qn headings or N paragraphs for N questions), split and assign rows.
+    """
+    if not answers_list or not isinstance(answers_list, list):
+        return answers_list
+    tls = _ordered_top_level_questions(list(exam.questions))
+    if len(tls) <= 1:
+        return answers_list
+    top_level_ids = {t.id for t in tls}
+    locked_question_ids = {
+        str(e.get("questionId"))
+        for e in answers_list
+        if str(e.get("typedAnswer") or "").strip()
+    }
+    out: List[dict] = []
+    for entry in answers_list:
+        qid = str(entry.get("questionId") or "")
+        raw_html = str(entry.get("typedAnswer") or "")
+        if qid not in top_level_ids or not raw_html.strip():
+            out.append(entry)
+            continue
+        text_content, latex_content = extract_math_from_html(raw_html)
+        plain_parts = []
+        if text_content:
+            plain_parts.append(text_content)
+        if latex_content:
+            plain_parts.append(latex_content)
+        plain = "\n\n".join(plain_parts).strip() if plain_parts else ""
+        if not plain:
+            out.append(entry)
+            continue
+        chunks, _ = _resolve_monolithic_chunks(plain, tls)
+        if not _monolithic_chunks_usable(chunks, tls) or chunks is None:
+            out.append(entry)
+            continue
+        expanded: List[dict] = []
+        for top_q, chunk in zip(tls, chunks):
+            if not (chunk or "").strip():
+                continue
+            before = len(expanded)
+            _dispatch_typed_chunk_to_top_level_question(
+                chunk,
+                top_q,
+                expanded,
+                host_top_level_id=qid,
+                locked_question_ids=locked_question_ids,
+            )
+            if len(expanded) == before:
+                continue
+        if len(expanded) < 2:
+            out.append(entry)
+            continue
+        out.extend(expanded)
+    return out
+
+
+def _ingest_image_as_full_exam_monolith_if_detected(
+    raw: bytes,
+    filename: str,
+    exam: models.Exam,
+    ocr: OCRProcessor,
+) -> Optional[Tuple[List[dict], List[dict]]]:
+    """
+    One photo (PNG/JPEG/…) under a question slot that OCRs to a multi-section answer sheet.
+    """
+    stem = Path(filename or "").stem
+    if not stem.startswith("q_"):
+        return None
+    tls = _ordered_top_level_questions(list(exam.questions))
+    if len(tls) <= 1:
+        return None
+    fn_lower = (filename or "").lower()
+    if fn_lower.endswith(".pdf"):
+        return None
+    if not fn_lower.endswith(
+        (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")
+    ):
+        head = raw[:12] if raw else b""
+        is_webp = len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+        if not (
+            head.startswith(b"\x89PNG")
+            or head.startswith(b"\xff\xd8\xff")
+            or head.startswith(b"GIF8")
+            or is_webp
+        ):
+            return None
+    try:
+        ocr_result = ocr.extract_steps_from_file(raw, filename or "upload.png")
+        combined = (ocr_result.combined_text or "").strip()
+    except Exception as ex:
+        logger.warning("OCR for monolithic image %s: %s", filename, ex)
+        return None
+    if not combined:
+        return None
+    chunks, _ = _resolve_monolithic_chunks(combined, tls)
+    if not _monolithic_chunks_usable(chunks, tls) or not chunks:
+        return None
+    extra_typed: List[dict] = []
+    empty_locked: set = set()
+    for top_q, chunk in zip(tls, chunks):
+        if not (chunk or "").strip():
+            continue
+        _dispatch_typed_chunk_to_top_level_question(
+            chunk,
+            top_q,
+            extra_typed,
+            host_top_level_id="",
+            locked_question_ids=empty_locked,
+        )
+    if len(extra_typed) < 2:
+        return None
+    return (extra_typed, [])
+
+
+def _ocr_text_likely_scan_app_noise(combined: str) -> bool:
+    """Phone scan apps often watermark OCR; those strings are not student work."""
+    t = combined or ""
+    if len(t) < 40:
+        return False
+    return bool(
+        re.search(
+            r"(?i)(camscanner|scan\s*hero|tiny\s*scanner|adobe\s*scan|microsoft\s+lens)",
+            t,
+        )
     )
 
 
@@ -2571,7 +3688,7 @@ def _process_answer_page_for_top_level_question(
         page_buf = _io.BytesIO()
         writer.write(page_buf)
         page_buf.seek(0)
-        imgs = _c2b(page_buf.read(), dpi=200)
+        imgs = _c2b(page_buf.read(), dpi=getattr(ocr, "dpi", 360) or 360)
         if not imgs:
             return
         img_buf = _io.BytesIO()
@@ -2581,14 +3698,32 @@ def _process_answer_page_for_top_level_question(
         combined = (ocr_result.combined_text or "").strip() or "\n".join(
             s for s in ocr_result.steps if s.strip()
         )
-        if subs and combined and len(combined) > 30:
-            chunks = _split_multipart_page_text(combined, len(subs))
-            for sub_q, chunk in zip(subs, chunks):
-                _append_typed_for_question(extra_typed_answers, sub_q, chunk)
-            return
+        combined = _strip_scan_app_watermarks(combined)
+        ocr_is_usable = (
+            bool(combined)
+            and len(combined) > 30
+            and not _ocr_text_likely_scan_app_noise(combined)
+        )
+        # Always keep the rendered page as an image record so the grader can
+        # re-OCR it at grade time / instructors can review the original scan.
         target = subs[0] if subs else top_q
         safe_name = f"q_{target.id}_pdf{page_idx}.png"
         extra_image_records.append({"filename": safe_name, "data": png_bytes})
+
+        # Also save the OCR transcript as a typed answer so the marked report
+        # shows the student's work even when (a) the question has no gold
+        # steps configured or (b) the grader can't compare to a reference.
+        if ocr_is_usable:
+            if subs:
+                chunks = _split_multipart_page_text(combined, len(subs))
+                for sub_q, chunk in zip(subs, chunks):
+                    body = _plain_chunk_to_tiptap_html((chunk or "").strip())
+                    if body:
+                        _append_typed_for_question(extra_typed_answers, sub_q, body)
+            else:
+                body = _plain_chunk_to_tiptap_html(combined)
+                if body:
+                    _append_typed_for_question(extra_typed_answers, top_q, body)
     except Exception as ex:
         logger.warning("Could not render/scanned PDF page %s: %s", page_idx, ex)
 
@@ -2606,10 +3741,11 @@ def _ingest_full_answer_pdf(
     if not tls:
         return extra_typed, extra_img
 
-    if len(pdf_pages) == 1 and len(tls) > 1:
-        sole = pdf_pages[0]
-        chunks = _split_monolithic_solution_text(sole, tls)
-        if chunks and len(chunks) == len(tls):
+    if len(tls) > 1:
+        chunks, _split_m = _try_split_answer_pdf_across_questions(
+            pdf_bytes, pdf_pages, tls, ocr
+        )
+        if _monolithic_chunks_usable(chunks, tls) and chunks is not None:
             for top_q, chunk in zip(tls, chunks):
                 if not (chunk or "").strip():
                     continue
@@ -2672,6 +3808,40 @@ def _preview_sub_parts_for_page(
     return out
 
 
+def _ocr_excerpt_single_pdf_page(
+    pdf_bytes: bytes, page_idx: int, ocr: OCRProcessor
+) -> str:
+    """Run OCR on one PDF page for preview excerpts (review UI)."""
+    try:
+        import io as _io
+        from pdf2image import convert_from_bytes as _c2b
+        from pypdf import PdfReader as _PR, PdfWriter as _PW
+
+        reader = _PR(_io.BytesIO(pdf_bytes))
+        if page_idx >= len(reader.pages):
+            return ""
+        writer = _PW()
+        writer.add_page(reader.pages[page_idx])
+        buf = _io.BytesIO()
+        writer.write(buf)
+        buf.seek(0)
+        base_dpi = int(getattr(ocr, "dpi", 360) or 360)
+        # Match main OCR pipeline — capping at 220px previously blurred x², +, (), etc.
+        dpi = max(240, min(420, base_dpi))
+        imgs = _c2b(buf.read(), dpi=dpi)
+        if not imgs:
+            return ""
+        ib = _io.BytesIO()
+        imgs[0].save(ib, format="PNG")
+        res = ocr.extract_steps_from_file(
+            ib.getvalue(), f"preview_p{page_idx}.png", fast=True
+        )
+        return _strip_scan_app_watermarks((res.combined_text or "").strip())
+    except Exception as ex:
+        logger.debug("Preview OCR for PDF page %s: %s", page_idx, ex)
+        return ""
+
+
 def build_answer_pdf_preview(pdf_bytes: bytes, exam: models.Exam, ocr: OCRProcessor) -> dict:
     """
     Dry-run routing for the full-answer PDF (no DB writes). Used by the take-exam UI.
@@ -2706,22 +3876,69 @@ def build_answer_pdf_preview(pdf_bytes: bytes, exam: models.Exam, ocr: OCRProces
             "summary": "No pages detected.",
         }
 
-    if n_pages == 1 and n_tl > 1:
-        sole = pdf_pages[0]
-        chunks = (
-            _split_monolithic_solution_text(sole, tls) if ocr._text_is_clean(sole) else None
+    if n_tl > 1:
+        chunks, split_method = _try_split_answer_pdf_across_questions(
+            pdf_bytes, pdf_pages, tls, ocr
         )
-        if chunks and len(chunks) == n_tl:
+        if _monolithic_chunks_usable(chunks, tls) and chunks is not None:
+            if split_method == "blocks":
+                warnings.append(
+                    "Answers were split by matching the number of paragraphs (or lines) to the number of questions (no “Question 2”-style headings). Check that each block matches the right question."
+                )
+            if split_method == "line_numbers":
+                warnings.append(
+                    "Answers were split on line-leading numbers (1. 2) 3. …). Verify each section matches the intended exam question."
+                )
+            if split_method == "flow_bins":
+                warnings.append(
+                    "OCR labels were unclear, so answers were split by reading order into sequential blocks. Please verify each block is mapped to the intended question."
+                )
             for top_q, chunk in zip(tls, chunks):
                 subs = _sorted_subquestions(top_q)
                 rows.append(
                     {
                         "questionNumber": top_q.number,
                         "questionLabel": f"Q{top_q.number}",
-                        "source": "single_page_numbered_sections",
+                        "source": "multi_section_split",
                         "subParts": _preview_sub_parts_for_page(subs, chunk, ocr),
+                        "answerExcerpt": _preview_answer_excerpt(chunk),
+                        "pdfPage": None,
                     }
                 )
+            if n_pages == 1:
+                if split_method == "blocks":
+                    summary_mono = (
+                        f"One PDF page split into {n_tl} parts by paragraph/line count; verify each block matches the intended question."
+                    )
+                elif split_method == "line_numbers":
+                    summary_mono = (
+                        f"One PDF page split into {n_tl} sections using numbered lines (1. 2. …); confirm each matches the right question."
+                    )
+                elif split_method == "flow_bins":
+                    summary_mono = (
+                        f"One PDF page split into {n_tl} sequential OCR blocks (labels unclear); confirm each block matches the right question."
+                    )
+                else:
+                    summary_mono = (
+                        f"One PDF page split into {n_tl} main questions via headings (1., Question 2, Q3, …)."
+                    )
+            else:
+                if split_method == "blocks":
+                    summary_mono = (
+                        f"{n_pages} PDF pages were merged and split into {n_tl} answers by paragraph/line count; verify each block matches the intended question."
+                    )
+                elif split_method == "line_numbers":
+                    summary_mono = (
+                        f"{n_pages} PDF page(s) were merged and split into {n_tl} answers using numbered lines; confirm each section matches the right question."
+                    )
+                elif split_method == "flow_bins":
+                    summary_mono = (
+                        f"{n_pages} PDF page(s) were merged and split into {n_tl} sequential OCR blocks (labels unclear); confirm each block matches the right question."
+                    )
+                else:
+                    summary_mono = (
+                        f"{n_pages} PDF page(s) were merged and split into {n_tl} main questions via headings (1., Question 2, Q3, …)."
+                    )
             return {
                 "strategy": "monolithic",
                 "pdfPageCount": n_pages,
@@ -2729,7 +3946,7 @@ def build_answer_pdf_preview(pdf_bytes: bytes, exam: models.Exam, ocr: OCRProces
                 "rows": rows,
                 "warnings": warnings,
                 "monolithicDetected": True,
-                "summary": f"One PDF page split into {n_tl} main questions via headings (1., Question 2, Q3, …).",
+                "summary": summary_mono,
             }
 
     for page_idx, top_q in enumerate(tls):
@@ -2740,24 +3957,45 @@ def build_answer_pdf_preview(pdf_bytes: bytes, exam: models.Exam, ocr: OCRProces
                     "questionLabel": f"Q{top_q.number}",
                     "source": "missing_page",
                     "subParts": [],
+                    "answerExcerpt": None,
+                    "pdfPage": None,
                     "note": f"No page {page_idx + 1} in PDF — nothing routed here.",
                 }
             )
             continue
         page_text = pdf_pages[page_idx]
         subs = _sorted_subquestions(top_q)
+        excerpt = (
+            _preview_answer_excerpt(page_text)
+            if (page_text or "").strip()
+            else None
+        )
+        if (
+            excerpt is None
+            and n_pages <= 12
+            and not ocr._text_is_clean(page_text or "")
+        ):
+            ocr_extra = _ocr_excerpt_single_pdf_page(pdf_bytes, page_idx, ocr)
+            if ocr_extra.strip():
+                excerpt = _preview_answer_excerpt(ocr_extra)
         rows.append(
             {
                 "questionNumber": top_q.number,
                 "questionLabel": f"Q{top_q.number}",
                 "source": f"pdf_page_{page_idx + 1}",
                 "subParts": _preview_sub_parts_for_page(subs, page_text, ocr),
+                "answerExcerpt": excerpt,
+                "pdfPage": page_idx + 1,
             }
         )
 
     if n_pages > n_tl:
         warnings.append(
             f"{n_pages - n_tl} extra PDF page(s) after page {n_tl} will be ignored."
+        )
+    if n_tl > 1 and n_pages != n_tl:
+        warnings.append(
+            f"This PDF has {n_pages} page(s) for {n_tl} main questions; section detection did not match, so page 1 → Q{tls[0].number}, page 2 → Q{tls[1].number}, … Add headings like “1.” or “Question 2” on their own lines so answers can be reassigned automatically."
         )
     if n_pages == 1 and n_tl > 1:
         warnings.append(
@@ -2854,10 +4092,18 @@ def _ingest_single_page_pdf_as_full_exam_if_detected(
     if len(pages) != 1:
         return None
     sole = pages[0]
-    if not ocr._text_is_clean(sole):
-        return None
-    chunks = _split_monolithic_solution_text(sole, tls)
-    if not chunks or len(chunks) != len(tls):
+    chunks: Optional[List[str]] = None
+    if ocr._text_is_clean(sole):
+        chunks, _ = _resolve_monolithic_chunks(sole, tls)
+    if not _monolithic_chunks_usable(chunks, tls):
+        try:
+            ocr_result = ocr.extract_steps_from_file(pdf_bytes, filename)
+            combined = (ocr_result.combined_text or "").strip()
+        except Exception:
+            combined = ""
+        if combined:
+            chunks, _ = _resolve_monolithic_chunks(combined, tls)
+    if not _monolithic_chunks_usable(chunks, tls):
         return None
     extra_typed: List[dict] = []
     extra_img: List[dict] = []
@@ -2954,8 +4200,25 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                         ))
                 
                 if not gold_steps:
-                    # No gold steps defined, skip grading
+                    # No reference solution configured. Still store the typed
+                    # answer as an unscored GradingResult so the marked PDF
+                    # shows the student's work and a professor can grade it.
                     print(f"Warning: Question {question.id} has no valid gold steps")
+                    if (text_content or "").strip() or (latex_content or "").strip():
+                        db.add(
+                            models.GradingResult(
+                                submission_id=submission.id,
+                                question_id=question.id,
+                                extracted_text=text_content,
+                                extracted_latex=latex_content,
+                                score=0.0,
+                                max_score=float(question.points or 0),
+                                feedback="Typed answer captured; no reference solution set — awaiting manual grade.",
+                                is_correct=False,
+                            )
+                        )
+                        db.flush()
+                        graded_question_ids.add(question.id)
                     continue
                 
                 # Debug logging
@@ -3085,6 +4348,27 @@ async def grade_submission_automatically(submission_id: str, db: Session):
                         ))
 
                 if not gold_steps:
+                    # No reference solution configured — still record the OCR
+                    # transcript so the marked report shows the student's work
+                    # and the instructor can grade it manually.
+                    extracted_text = (
+                        ocr_result.combined_text or "\n".join(student_steps)
+                    )
+                    if extracted_text.strip():
+                        db.add(
+                            models.GradingResult(
+                                submission_id=submission.id,
+                                question_id=question.id,
+                                extracted_text=extracted_text,
+                                extracted_latex=None,
+                                score=0.0,
+                                max_score=float(question.points or 0),
+                                feedback="Auto-OCR captured; no reference solution set — awaiting manual grade.",
+                                is_correct=False,
+                            )
+                        )
+                        db.flush()
+                        graded_question_ids.add(question.id)
                     continue
 
                 grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
@@ -3225,12 +4509,30 @@ async def submit_exam(
         except Exception as ex:
             logger.warning("PDF expansion skipped for %s: %s", fname, ex)
 
+    for i, raw, fname in image_payloads:
+        if i in skip_upload_indices:
+            continue
+        if (fname or "").lower().endswith(".pdf"):
+            continue
+        try:
+            expanded_img = _ingest_image_as_full_exam_monolith_if_detected(
+                raw, fname, exam, ocr_processor
+            )
+            if expanded_img:
+                t3, img3 = expanded_img
+                extra_typed_answers.extend(t3)
+                extra_image_records.extend(img3)
+                skip_upload_indices.add(i)
+        except Exception as ex:
+            logger.warning("Image monolith expansion skipped for %s: %s", fname, ex)
+
     # ── Merge typed answers ───────────────────────────────────────────────────
     merged_answers = extra_typed_answers[:]
     if answers:
         try:
             import json as _json
             existing = _json.loads(answers)
+            existing = _expand_monolithic_typed_payload(existing, exam)
             # Existing typed answers take precedence (student typed them manually)
             existing_qids = {a.get('questionId') for a in existing}
             for ea in extra_typed_answers:
@@ -3292,6 +4594,17 @@ async def submit_exam(
             )
             db.add(submission_image)
     
+    course = db.query(models.Course).filter(models.Course.id == exam.course_id).first()
+    if course:
+        notifications_service.push_notification(
+            db,
+            user_id=course.professor_id,
+            kind="submission_received",
+            title="New exam submission",
+            body=f"{current_user.name} submitted {exam.title}.",
+            link=f"/submissions/{new_submission.id}",
+        )
+
     db.commit()
     db.refresh(new_submission)
     
@@ -3359,28 +4672,22 @@ def get_submissions(
         # First, add answers from grading results (if any)
         for grading_result in submission.grading_results:
             graded_question_ids.add(grading_result.question_id)
-            step_results = [
-                schemas.StepResultResponse(
-                    id=step.id,
-                    stepNumber=step.step_number,
-                    isCorrect=step.is_correct,
-                    score=step.score,
-                    maxScore=step.max_score,
-                    feedback=step.feedback or "",
-                    expected=step.expected,
-                    received=step.received
-                )
-                for step in grading_result.step_results
-            ]
-            
+            step_results = [_step_result_response_for_api(step) for step in grading_result.step_results]
+
             question = questions_by_id.get(grading_result.question_id)
-            
+            disp_plain, disp_latex = _polish_submission_answer_fields(
+                grading_result.extracted_text,
+                grading_result.extracted_latex,
+            )
+
             answers.append(
                 schemas.SubmittedAnswerResponse(
                     questionId=grading_result.question_id,
                     questionNumber=question.number if question else 0,
                     extractedText=grading_result.extracted_text,
                     extractedLatex=grading_result.extracted_latex,
+                    extractedTextDisplay=disp_plain,
+                    extractedMathLatex=disp_latex,
                     extractedSteps=[],
                     gradingResult=schemas.GradingResultResponse(
                         id=grading_result.id,
@@ -3448,28 +4755,22 @@ def get_submission(
     graded_question_ids = set()
     for grading_result in submission.grading_results:
         graded_question_ids.add(grading_result.question_id)
-        step_results = [
-            schemas.StepResultResponse(
-                id=step.id,
-                stepNumber=step.step_number,
-                isCorrect=step.is_correct,
-                score=step.score,
-                maxScore=step.max_score,
-                feedback=step.feedback or "",
-                expected=step.expected,
-                received=step.received
-            )
-            for step in grading_result.step_results
-        ]
-        
+        step_results = [_step_result_response_for_api(step) for step in grading_result.step_results]
+
         question = questions_by_id.get(grading_result.question_id)
-        
+        disp_plain, disp_latex = _polish_submission_answer_fields(
+            grading_result.extracted_text,
+            grading_result.extracted_latex,
+        )
+
         answers.append(
             schemas.SubmittedAnswerResponse(
                 questionId=grading_result.question_id,
                 questionNumber=question.number if question else 0,
                 extractedText=grading_result.extracted_text,
                 extractedLatex=grading_result.extracted_latex,
+                extractedTextDisplay=disp_plain,
+                extractedMathLatex=disp_latex,
                 extractedSteps=[],
                 gradingResult=schemas.GradingResultResponse(
                     id=grading_result.id,
@@ -4057,6 +5358,16 @@ async def approve_submission(
     submission.status = models.SubmissionStatus.APPROVED
     submission.approved_at = datetime.utcnow()
     submission.approved_by = current_user.id
+    exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
+    exam_title = exam.title if exam else "Exam"
+    notifications_service.push_notification(
+        db,
+        user_id=submission.student_id,
+        kind="grade_released",
+        title=f"Grades released: {exam_title}",
+        body="Your instructor approved your work. View scores and feedback in My Results.",
+        link="/my-results",
+    )
     db.commit()
     
     return {
@@ -4201,6 +5512,247 @@ def get_dashboard_stats(
         totalSubmissions=submissions_count,
         pendingGrading=pending_count,
         averageScore=round(avg_score, 1) if avg_score else None
+    )
+
+
+def _week_start_monday(d: date) -> date:
+    return d - timedelta(days=d.weekday())
+
+
+def _submission_status_label(status: models.SubmissionStatus) -> str:
+    return {
+        models.SubmissionStatus.PENDING: "Pending",
+        models.SubmissionStatus.GRADING: "Grading",
+        models.SubmissionStatus.GRADED: "Graded",
+        models.SubmissionStatus.AWAITING_APPROVAL: "Awaiting approval",
+        models.SubmissionStatus.APPROVED: "Released",
+    }.get(status, status.value)
+
+
+@app.get("/api/dashboard/analytics", response_model=schemas.DashboardAnalyticsResponse)
+def get_dashboard_analytics(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Role-specific analytics for charts: instructors (professor/admin) see class-wide
+    submission and course metrics; students see their released scores and workload.
+    """
+    role_val = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+
+    if current_user.role in (models.UserRole.PROFESSOR, models.UserRole.ADMIN):
+        base = (
+            db.query(models.Submission)
+            .join(models.Exam, models.Submission.exam_id == models.Exam.id)
+            .join(models.Course, models.Exam.course_id == models.Course.id)
+        )
+        if current_user.role == models.UserRole.PROFESSOR:
+            base = base.filter(models.Course.professor_id == current_user.id)
+
+        status_rows = (
+            base.with_entities(models.Submission.status, func.count(models.Submission.id))
+            .group_by(models.Submission.status)
+            .all()
+        )
+        submission_status = [
+            schemas.AnalyticsCountItem(
+                label=_submission_status_label(st),
+                key=st.value,
+                count=cnt,
+            )
+            for st, cnt in status_rows
+        ]
+        submission_status.sort(key=lambda x: -x.count)
+
+        courses_q = db.query(models.Course)
+        if current_user.role == models.UserRole.PROFESSOR:
+            courses_q = courses_q.filter(models.Course.professor_id == current_user.id)
+        courses = courses_q.all()
+        course_ids = [c.id for c in courses]
+        course_by_id = {c.id: c for c in courses}
+
+        course_breakdown: List[schemas.InstructorCourseAnalyticsItem] = []
+        if course_ids:
+            subs_for_courses = (
+                db.query(models.Submission, models.Course.id.label("cid"))
+                .join(models.Exam, models.Submission.exam_id == models.Exam.id)
+                .join(models.Course, models.Exam.course_id == models.Course.id)
+                .filter(models.Course.id.in_(course_ids))
+            )
+            if current_user.role == models.UserRole.PROFESSOR:
+                subs_for_courses = subs_for_courses.filter(models.Course.professor_id == current_user.id)
+
+            from collections import defaultdict
+
+            per_course_subs: dict = defaultdict(list)
+            for sub, cid in subs_for_courses.all():
+                per_course_subs[cid].append(sub)
+
+            for cid in course_ids:
+                c = course_by_id[cid]
+                subs_list = per_course_subs.get(cid, [])
+                scored = [
+                    s
+                    for s in subs_list
+                    if s.total_score is not None and s.max_score and s.max_score > 0
+                ]
+                avg_pct = None
+                if scored:
+                    avg_pct = round(
+                        sum((s.total_score / s.max_score) * 100.0 for s in scored) / len(scored),
+                        1,
+                    )
+                course_breakdown.append(
+                    schemas.InstructorCourseAnalyticsItem(
+                        courseId=c.id,
+                        courseName=c.name,
+                        courseCode=c.code,
+                        submissionCount=len(subs_list),
+                        gradedCount=len(scored),
+                        avgPercent=avg_pct,
+                    )
+                )
+            course_breakdown.sort(key=lambda x: -x.submissionCount)
+
+        enrollments_by_course: List[schemas.InstructorEnrollmentItem] = []
+        for cid in course_ids:
+            c = course_by_id[cid]
+            n = (
+                db.query(func.count(models.CourseEnrollment.id))
+                .filter(
+                    models.CourseEnrollment.course_id == cid,
+                    models.CourseEnrollment.status == models.EnrollmentStatus.APPROVED,
+                )
+                .scalar()
+                or 0
+            )
+            enrollments_by_course.append(
+                schemas.InstructorEnrollmentItem(
+                    courseId=c.id,
+                    courseName=c.name,
+                    approvedStudents=int(n),
+                )
+            )
+        enrollments_by_course.sort(key=lambda x: -x.approvedStudents)
+
+        cutoff = datetime.utcnow() - timedelta(weeks=11)
+        recent_submitted = (
+            base.filter(models.Submission.submitted_at.isnot(None))
+            .filter(models.Submission.submitted_at >= cutoff)
+            .with_entities(models.Submission.submitted_at)
+            .all()
+        )
+        week_counts: dict = {}
+        for (sub_at,) in recent_submitted:
+            if not sub_at:
+                continue
+            d = sub_at.date() if hasattr(sub_at, "date") else sub_at
+            ws = _week_start_monday(d)
+            week_counts[ws] = week_counts.get(ws, 0) + 1
+
+        today = datetime.utcnow().date()
+        anchor = _week_start_monday(today)
+        weekly_submissions: List[schemas.InstructorWeekSubmissionsItem] = []
+        for i in range(10):
+            ws = anchor - timedelta(weeks=(9 - i))
+            weekly_submissions.append(
+                schemas.InstructorWeekSubmissionsItem(
+                    weekStart=ws.isoformat(),
+                    count=int(week_counts.get(ws, 0)),
+                )
+            )
+
+        return schemas.DashboardAnalyticsResponse(
+            role=role_val,
+            instructor=schemas.InstructorAnalyticsData(
+                submissionStatus=submission_status,
+                courseBreakdown=course_breakdown,
+                weeklySubmissions=weekly_submissions,
+                enrollmentsByCourse=enrollments_by_course,
+            ),
+            student=None,
+        )
+
+    # Student
+    enrolled_rows = (
+        db.query(models.CourseEnrollment.course_id)
+        .filter(
+            models.CourseEnrollment.student_id == current_user.id,
+            models.CourseEnrollment.status == models.EnrollmentStatus.APPROVED,
+        )
+        .all()
+    )
+    enrolled_ids = [r[0] for r in enrolled_rows]
+
+    st_rows = (
+        db.query(models.Submission.status, func.count(models.Submission.id))
+        .filter(models.Submission.student_id == current_user.id)
+        .group_by(models.Submission.status)
+        .all()
+    )
+    submission_status = [
+        schemas.AnalyticsCountItem(
+            label=_submission_status_label(st),
+            key=st.value,
+            count=cnt,
+        )
+        for st, cnt in st_rows
+    ]
+    submission_status.sort(key=lambda x: -x.count)
+
+    released_exam_scores: List[schemas.StudentExamScoreItem] = []
+    course_perf_map: dict = {}
+
+    if enrolled_ids:
+        released = (
+            db.query(models.Submission, models.Exam, models.Course)
+            .join(models.Exam, models.Submission.exam_id == models.Exam.id)
+            .join(models.Course, models.Exam.course_id == models.Course.id)
+            .filter(models.Submission.student_id == current_user.id)
+            .filter(models.Submission.status == models.SubmissionStatus.APPROVED)
+            .filter(models.Submission.total_score.isnot(None))
+            .filter(models.Submission.max_score > 0)
+            .filter(models.Course.id.in_(enrolled_ids))
+            .order_by(models.Submission.submitted_at.desc())
+            .all()
+        )
+        for sub, exam, course in released:
+            pct = round((sub.total_score / sub.max_score) * 100.0, 1)
+            released_exam_scores.append(
+                schemas.StudentExamScoreItem(
+                    examId=exam.id,
+                    examTitle=exam.title,
+                    courseName=course.name,
+                    percent=pct,
+                    submittedAt=sub.submitted_at,
+                )
+            )
+            cid = course.id
+            if cid not in course_perf_map:
+                course_perf_map[cid] = {"name": course.name, "pcts": []}
+            course_perf_map[cid]["pcts"].append(pct)
+
+    course_performance = [
+        schemas.StudentCoursePerformanceItem(
+            courseId=cid,
+            courseName=info["name"],
+            avgPercent=round(sum(info["pcts"]) / len(info["pcts"]), 1),
+            gradedCount=len(info["pcts"]),
+        )
+        for cid, info in course_perf_map.items()
+    ]
+    course_performance.sort(key=lambda x: -x.avgPercent)
+
+    chart_scores = list(reversed(released_exam_scores[:20]))
+
+    return schemas.DashboardAnalyticsResponse(
+        role=role_val,
+        instructor=None,
+        student=schemas.StudentAnalyticsData(
+            submissionStatus=submission_status,
+            releasedExamScores=chart_scores,
+            coursePerformance=course_performance,
+        ),
     )
 
 

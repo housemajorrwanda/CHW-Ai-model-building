@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { RichContentViewer } from './RichContentViewer';
+import { cn } from '@/lib/utils';
 
 interface SubQuestion {
   id: string;
@@ -14,8 +15,12 @@ interface QuestionDisplayProps {
   questionNumber: number;
   questionText: string | any;
   questionPoints: number;
+  /** Short label from the exam author (shown under the question number). */
+  outlineTitle?: string | null;
   attachments?: Array<{ id: string; filePath: string; filename: string; attachmentType?: string }>;
   subQuestions?: SubQuestion[];
+  /** When false, hides the top meta row (number / points) so the parent can render its own chrome. */
+  showQuestionHeader?: boolean;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -43,29 +48,42 @@ export function QuestionDisplay({
   questionNumber,
   questionText,
   questionPoints,
+  outlineTitle,
   attachments,
   subQuestions,
+  showQuestionHeader = true,
 }: QuestionDisplayProps) {
   const imageAttachments = (attachments ?? []).filter(
     (a) => a.attachmentType === 'image' || !a.attachmentType
   );
 
   return (
-    <Card className="mb-4">
-      <CardHeader className="pb-3 bg-muted/30">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-xl flex items-center gap-3">
-            <Badge variant="outline" className="text-base px-3 py-1">
-              Q{questionNumber}
-            </Badge>
-            <span className="text-base font-normal text-muted-foreground">
-              {questionPoints} {questionPoints === 1 ? 'point' : 'points'}
-            </span>
-          </CardTitle>
-        </div>
-      </CardHeader>
+    <Card className="mb-4 border-0 shadow-none">
+      {showQuestionHeader ? (
+        <CardHeader className="bg-muted/30 pb-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle className="flex flex-wrap items-center gap-3 text-xl">
+              <Badge variant="outline" className="px-3 py-1 text-base">
+                Q{questionNumber}
+              </Badge>
+              <span className="text-base font-normal text-muted-foreground">
+                {questionPoints} {questionPoints === 1 ? 'point' : 'points'}
+              </span>
+            </CardTitle>
+            {outlineTitle?.trim() ? (
+              <p className="text-sm font-medium text-foreground sm:max-w-[60%] sm:truncate sm:pl-2 sm:text-right">
+                {outlineTitle.trim()}
+              </p>
+            ) : null}
+          </div>
+        </CardHeader>
+      ) : outlineTitle?.trim() ? (
+        <CardHeader className="border-b border-border/50 pb-3 pt-0">
+          <p className="text-sm font-medium text-muted-foreground">{outlineTitle.trim()}</p>
+        </CardHeader>
+      ) : null}
 
-      <CardContent className="pt-4 space-y-4">
+      <CardContent className={cn('space-y-4', showQuestionHeader ? 'pt-4' : 'pt-2')}>
         {/* Main question text — rendered with full KaTeX + TipTap support */}
         {questionText && (
           <RichContentViewer content={questionText} />

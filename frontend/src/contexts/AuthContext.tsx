@@ -20,6 +20,9 @@ interface AuthContextType {
     gender?: string;
     studentId?: string;
     dateOfBirth?: string | null;
+    remindExamDeadlinesEnabled?: boolean;
+    remindExamOffsetsHours?: number[];
+    remindTeachingDeadlinesEnabled?: boolean;
   }) => Promise<void>;
   uploadAvatar: (file: File) => Promise<void>;
   removeAvatar: () => Promise<void>;
@@ -48,6 +51,11 @@ function mapApiUser(userData: Record<string, unknown>): User {
     studentId: (userData.studentId as string | undefined) || undefined,
     dateOfBirth:
       typeof userData.dateOfBirth === 'string' ? userData.dateOfBirth : undefined,
+    remindExamDeadlinesEnabled: userData.remindExamDeadlinesEnabled !== false,
+    remindExamOffsetsHours: Array.isArray(userData.remindExamOffsetsHours)
+      ? (userData.remindExamOffsetsHours as number[])
+      : [168, 72, 24],
+    remindTeachingDeadlinesEnabled: userData.remindTeachingDeadlinesEnabled !== false,
   };
 }
 
@@ -170,6 +178,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     gender?: string;
     studentId?: string;
     dateOfBirth?: string | null;
+    remindExamDeadlinesEnabled?: boolean;
+    remindExamOffsetsHours?: number[];
+    remindTeachingDeadlinesEnabled?: boolean;
   }) => {
     const userData = (await authAPI.updateMe({
       name: data.name,
@@ -183,6 +194,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       gender: data.gender,
       studentId: data.studentId,
       dateOfBirth: data.dateOfBirth,
+      remindExamDeadlinesEnabled: data.remindExamDeadlinesEnabled,
+      remindExamOffsetsHours: data.remindExamOffsetsHours,
+      remindTeachingDeadlinesEnabled: data.remindTeachingDeadlinesEnabled,
     })) as Record<string, unknown>;
     setUser(mapApiUser(userData));
   }, []);

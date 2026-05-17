@@ -62,9 +62,71 @@ def migrate_sqlite_user_demographics():
             conn.execute(text(stmt))
 
 
+def migrate_questions_outline_title():
+    """Add outline_title to questions when upgrading an existing database."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if not insp.has_table("questions"):
+        return
+    existing = {c["name"] for c in insp.get_columns("questions")}
+    if "outline_title" in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE questions ADD COLUMN outline_title VARCHAR(500)"))
+
+
+def migrate_user_reminder_preferences():
+    """Add reminder preference columns when upgrading an existing database."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if not insp.has_table("users"):
+        return
+    existing = {c["name"] for c in insp.get_columns("users")}
+    dialect = engine.dialect.name
+    alters: list[str] = []
+    if "remind_exam_deadlines_enabled" not in existing:
+        if dialect == "sqlite":
+            alters.append(
+                "ALTER TABLE users ADD COLUMN remind_exam_deadlines_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        else:
+            alters.append(
+                "ALTER TABLE users ADD COLUMN remind_exam_deadlines_enabled BOOLEAN NOT NULL DEFAULT TRUE"
+            )
+    if "remind_exam_offsets_hours" not in existing:
+        alters.append("ALTER TABLE users ADD COLUMN remind_exam_offsets_hours VARCHAR(512)")
+    if "remind_teaching_deadlines_enabled" not in existing:
+        if dialect == "sqlite":
+            alters.append(
+                "ALTER TABLE users ADD COLUMN remind_teaching_deadlines_enabled INTEGER NOT NULL DEFAULT 1"
+            )
+        else:
+            alters.append(
+                "ALTER TABLE users ADD COLUMN remind_teaching_deadlines_enabled BOOLEAN NOT NULL DEFAULT TRUE"
+            )
+    if alters:
+        with engine.begin() as conn:
+            for stmt in alters:
+                conn.execute(text(stmt))
+    insp = inspect(engine)
+    cols = {c["name"] for c in insp.get_columns("users")}
+    if "remind_exam_offsets_hours" in cols:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE users SET remind_exam_offsets_hours = '[168,72,24]' "
+                    "WHERE remind_exam_offsets_hours IS NULL OR trim(remind_exam_offsets_hours) = ''"
+                )
+            )
+
+
 def init_db():
     """Initialize database tables"""
     import models  # Import models to register them
     Base.metadata.create_all(bind=engine)
     migrate_sqlite_user_demographics()
+    migrate_questions_outline_title()
+    migrate_user_reminder_preferences()
 

@@ -1,7 +1,7 @@
 """
 SQLAlchemy database models
 """
-from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, Date, ForeignKey, Enum
+from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, Date, ForeignKey, Enum, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -40,6 +40,12 @@ class EnrollmentStatus(str, enum.Enum):
     REJECTED = "rejected"
 
 
+class AnnouncementReactionKind(str, enum.Enum):
+    LIKE = "like"
+    IMPROVE = "improve"
+    IMPLEMENT = "implement"
+
+
 class User(Base):
     __tablename__ = "users"
     
@@ -59,10 +65,19 @@ class User(Base):
     gender = Column(String(64), nullable=True)
     student_id = Column(String(128), nullable=True)
     date_of_birth = Column(Date, nullable=True)
+
+    # Reminder preferences (in-app feed; stored server-side)
+    remind_exam_deadlines_enabled = Column(Boolean, default=True, nullable=False)
+    remind_exam_offsets_hours = Column(String(512), nullable=True)  # JSON array of ints, e.g. [168,72,24]
+    remind_teaching_deadlines_enabled = Column(Boolean, default=True, nullable=False)
     
     # Relationships
     courses_taught = relationship("Course", back_populates="professor", foreign_keys="Course.professor_id")
     submissions = relationship("Submission", back_populates="student", foreign_keys="Submission.student_id")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    scheduled_reminders = relationship(
+        "UserScheduledReminder", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class Course(Base):
@@ -81,6 +96,7 @@ class Course(Base):
     exams = relationship("Exam", back_populates="course", cascade="all, delete-orphan")
     topics = relationship("CourseTopic", back_populates="course", cascade="all, delete-orphan")
     enrollments = relationship("CourseEnrollment", back_populates="course", cascade="all, delete-orphan")
+    announcements = relationship("CourseAnnouncement", back_populates="course", cascade="all, delete-orphan")
 
 
 class Exam(Base):
@@ -116,6 +132,7 @@ class Question(Base):
     # Enhanced fields
     question_type = Column(String(50), default="standard")  # standard, multi-part
     rich_content = Column(Text, nullable=True)  # JSON for TipTap content
+    outline_title = Column(String(500), nullable=True)  # Short label for outline / nav (optional)
     outline_level = Column(Integer, default=1)
     parent_question_id = Column(String, ForeignKey("questions.id"), nullable=True)
     
@@ -292,6 +309,41 @@ class TopicSubtopic(Base):
     topic = relationship("CourseTopic", back_populates="subtopics")
 
 
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    kind = Column(String(64), nullable=False)
+    title = Column(String(500), nullable=False)
+    body = Column(Text, nullable=True)
+    link = Column(String(1024), nullable=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="notifications")
+
+
+class UserScheduledReminder(Base):
+    """User-chosen date/time reminders (from notification bell)."""
+
+    __tablename__ = "user_scheduled_reminders"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    source_key = Column(String(512), nullable=True, index=True)
+    title = Column(String(500), nullable=False)
+    body = Column(Text, nullable=True)
+    link = Column(String(1024), nullable=True)
+    user_note = Column(Text, nullable=True)
+    remind_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    repeat = Column(String(32), nullable=False, default="none")
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="scheduled_reminders")
+
+
 class CourseEnrollment(Base):
     __tablename__ = "course_enrollments"
     
@@ -305,4 +357,56 @@ class CourseEnrollment(Base):
     # Relationships
     course = relationship("Course", back_populates="enrollments")
     student = relationship("User", foreign_keys=[student_id])
+
+
+class CourseAnnouncement(Base):
+    __tablename__ = "course_announcements"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    course_id = Column(String, ForeignKey("courses.id"), nullable=False, index=True)
+    author_id = Column(String, ForeignKey("users.id"), nullable=False)
+    title = Column(String(500), nullable=False)
+    body = Column(Text, nullable=False)
+    pinned = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    course = relationship("Course", back_populates="announcements")
+    author = relationship("User", foreign_keys=[author_id])
+    comments = relationship(
+        "AnnouncementComment", back_populates="announcement", cascade="all, delete-orphan"
+    )
+    reactions = relationship(
+        "AnnouncementReaction", back_populates="announcement", cascade="all, delete-orphan"
+    )
+
+
+class AnnouncementComment(Base):
+    __tablename__ = "announcement_comments"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    announcement_id = Column(String, ForeignKey("course_announcements.id"), nullable=False, index=True)
+    author_id = Column(String, ForeignKey("users.id"), nullable=False)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    announcement = relationship("CourseAnnouncement", back_populates="comments")
+    author = relationship("User", foreign_keys=[author_id])
+
+
+class AnnouncementReaction(Base):
+    __tablename__ = "announcement_reactions"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    announcement_id = Column(String, ForeignKey("course_announcements.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    kind = Column(Enum(AnnouncementReactionKind), nullable=False)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    announcement = relationship("CourseAnnouncement", back_populates="reactions")
+    user = relationship("User", foreign_keys=[user_id])
+
+    __table_args__ = (
+        UniqueConstraint("announcement_id", "user_id", "kind", name="uq_announcement_reaction_user_kind"),
+    )
 

@@ -1,7 +1,7 @@
 """
 Pydantic schemas for API request/response validation
 """
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import List, Optional
 from datetime import datetime, date
 from enum import Enum
@@ -70,6 +70,9 @@ class UserResponse(BaseModel):
     gender: Optional[str] = None
     studentId: Optional[str] = None
     dateOfBirth: Optional[date] = None
+    remindExamDeadlinesEnabled: bool = True
+    remindExamOffsetsHours: List[int] = Field(default_factory=lambda: [168, 72, 24])
+    remindTeachingDeadlinesEnabled: bool = True
 
     class Config:
         from_attributes = True
@@ -88,6 +91,29 @@ class UserProfileUpdate(BaseModel):
     gender: Optional[str] = None
     studentId: Optional[str] = None
     dateOfBirth: Optional[date] = None
+    remindExamDeadlinesEnabled: Optional[bool] = None
+    remindExamOffsetsHours: Optional[List[int]] = None
+    remindTeachingDeadlinesEnabled: Optional[bool] = None
+
+    @field_validator("remindExamOffsetsHours")
+    @classmethod
+    def validate_exam_offsets(cls, v: Optional[List[int]]) -> Optional[List[int]]:
+        if v is None:
+            return None
+        out: List[int] = []
+        for x in v:
+            try:
+                h = int(x)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= h <= 8760:
+                out.append(h)
+        out = sorted(set(out))
+        if len(out) > 12:
+            raise ValueError("At most 12 reminder windows allowed")
+        if not out:
+            raise ValueError("Choose at least one time window, or turn off exam reminders")
+        return out
 
 
 class Token(BaseModel):
@@ -180,6 +206,65 @@ class CourseResponse(BaseModel):
         from_attributes = True
 
 
+class AnnouncementReactionKind(str, Enum):
+    LIKE = "like"
+    IMPROVE = "improve"
+    IMPLEMENT = "implement"
+
+
+class AnnouncementCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    body: str = Field(..., min_length=1, max_length=20000)
+    pinned: bool = False
+
+
+class AnnouncementUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=500)
+    body: Optional[str] = Field(None, min_length=1, max_length=20000)
+    pinned: Optional[bool] = None
+
+
+class AnnouncementCommentCreate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=8000)
+
+
+class AnnouncementCommentResponse(BaseModel):
+    id: str
+    authorId: str
+    authorName: str
+    body: str
+    createdAt: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AnnouncementResponse(BaseModel):
+    id: str
+    courseId: str
+    authorId: str
+    authorName: str
+    title: str
+    body: str
+    pinned: bool
+    createdAt: datetime
+    likeCount: int = 0
+    improveCount: int = 0
+    implementCount: int = 0
+    commentCount: int = 0
+    myLiked: bool = False
+    myImprove: bool = False
+    myImplement: bool = False
+    comments: List[AnnouncementCommentResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class AnnouncementReactionToggle(BaseModel):
+    kind: AnnouncementReactionKind
+
+
 # Attachment Schemas
 class AttachmentCreate(BaseModel):
     attachmentType: str  # image, scan, document
@@ -269,6 +354,7 @@ class SubQuestionCreate(BaseModel):
     finalAnswerLatex: str = ""
     questionType: str = "standard"
     richContent: Optional[dict] = None
+    outlineTitle: Optional[str] = None
     outlineLevel: int = 2
     subQuestions: List['SubQuestionCreate'] = []
 
@@ -283,6 +369,7 @@ class QuestionCreate(BaseModel):
     # Enhanced fields
     questionType: str = "standard"  # standard, multi-part
     richContent: Optional[dict] = None  # TipTap JSON
+    outlineTitle: Optional[str] = None  # Short label in outline (e.g. "Linear equations")
     outlineLevel: int = 1
     parentQuestionId: Optional[str] = None
     subQuestions: List['SubQuestionCreate'] = []
@@ -329,6 +416,7 @@ class QuestionResponse(BaseModel):
     finalAnswerLatex: Optional[str] = None
     questionType: Optional[str] = "standard"
     richContent: Optional[dict] = None
+    outlineTitle: Optional[str] = None
     outlineLevel: Optional[int] = 1
     parentQuestionId: Optional[str] = None
     subQuestions: Optional[List['QuestionResponse']] = []
@@ -375,6 +463,9 @@ class StepResultResponse(BaseModel):
     feedback: str
     expected: Optional[str] = None
     received: Optional[str] = None
+    expectedDisplay: Optional[str] = None
+    receivedDisplay: Optional[str] = None
+    receivedMathLatex: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -406,6 +497,8 @@ class SubmittedAnswerResponse(BaseModel):
     questionNumber: int
     extractedText: Optional[str] = None
     extractedLatex: Optional[str] = None
+    extractedTextDisplay: Optional[str] = None
+    extractedMathLatex: Optional[str] = None
     extractedSteps: List[ExtractedStepResponse]
     gradingResult: Optional[GradingResultResponse] = None
     
@@ -439,6 +532,68 @@ class DashboardStatsResponse(BaseModel):
     averageScore: Optional[float] = None
 
 
+class AnalyticsCountItem(BaseModel):
+    """Single bucket for status / category charts."""
+
+    label: str
+    key: str
+    count: int
+
+
+class InstructorCourseAnalyticsItem(BaseModel):
+    courseId: str
+    courseName: str
+    courseCode: str
+    submissionCount: int
+    gradedCount: int
+    avgPercent: Optional[float] = None
+
+
+class InstructorWeekSubmissionsItem(BaseModel):
+    weekStart: str
+    count: int
+
+
+class InstructorEnrollmentItem(BaseModel):
+    courseId: str
+    courseName: str
+    approvedStudents: int
+
+
+class InstructorAnalyticsData(BaseModel):
+    submissionStatus: List[AnalyticsCountItem]
+    courseBreakdown: List[InstructorCourseAnalyticsItem]
+    weeklySubmissions: List[InstructorWeekSubmissionsItem]
+    enrollmentsByCourse: List[InstructorEnrollmentItem]
+
+
+class StudentExamScoreItem(BaseModel):
+    examId: str
+    examTitle: str
+    courseName: str
+    percent: float
+    submittedAt: datetime
+
+
+class StudentCoursePerformanceItem(BaseModel):
+    courseId: str
+    courseName: str
+    avgPercent: float
+    gradedCount: int
+
+
+class StudentAnalyticsData(BaseModel):
+    submissionStatus: List[AnalyticsCountItem]
+    releasedExamScores: List[StudentExamScoreItem]
+    coursePerformance: List[StudentCoursePerformanceItem]
+
+
+class DashboardAnalyticsResponse(BaseModel):
+    role: str
+    instructor: Optional[InstructorAnalyticsData] = None
+    student: Optional[StudentAnalyticsData] = None
+
+
 class StepAdjustmentRequest(BaseModel):
     stepResultId: str
     score: Optional[float] = None
@@ -454,4 +609,67 @@ class GradeAdjustmentItem(BaseModel):
 
 class GradeAdjustmentRequest(BaseModel):
     adjustments: List[GradeAdjustmentItem] = []
+
+
+# Notifications
+class NotificationFeedItem(BaseModel):
+    id: str
+    category: str  # "notification" | "reminder"
+    kind: str
+    title: str
+    body: Optional[str] = None
+    link: Optional[str] = None
+    createdAt: datetime
+    readAt: Optional[datetime] = None
+    scheduledReminderId: Optional[str] = None
+    repeat: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationFeedResponse(BaseModel):
+    items: List[NotificationFeedItem]
+    unreadCount: int
+
+
+class ScheduleReminderRequest(BaseModel):
+    """Create a personal follow-up reminder from the bell."""
+
+    sourceKey: Optional[str] = None
+    title: str
+    body: Optional[str] = None
+    link: Optional[str] = None
+    userNote: Optional[str] = Field(None, max_length=2000)
+    remindAt: datetime
+    repeat: str = "none"
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, v: str) -> str:
+        t = (v or "").strip()
+        if not t:
+            raise ValueError("Title is required")
+        return t[:500]
+
+    @field_validator("repeat")
+    @classmethod
+    def repeat_allowed(cls, v: str) -> str:
+        r = (v or "none").lower()
+        allowed = frozenset({"none", "daily", "weekly", "monthly"})
+        if r not in allowed:
+            return "none"
+        return r
+
+
+class ScheduledReminderDueItem(BaseModel):
+    id: str
+    title: str
+    body: Optional[str] = None
+    link: Optional[str] = None
+    remindAt: datetime
+    repeat: str
+
+    class Config:
+        from_attributes = True
 

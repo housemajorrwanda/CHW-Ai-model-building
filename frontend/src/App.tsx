@@ -10,6 +10,8 @@ import Courses from "./pages/Courses";
 import CourseDetail from "./pages/CourseDetail";
 import CreateCourse from "./pages/CreateCourse";
 import BrowseCourses from "./pages/BrowseCourses";
+import AnnouncementsHub from "./pages/AnnouncementsHub";
+import CourseAnnouncements from "./pages/CourseAnnouncements";
 import StudentExams from "./pages/StudentExams";
 import ProfessorExams from "./pages/ProfessorExams";
 import CreateExam from "./pages/CreateExam";
@@ -18,6 +20,7 @@ import SubmissionDetail from "./pages/SubmissionDetail";
 import SubmitExam from "./pages/SubmitExam";
 import TakeExam from "./pages/TakeExam";
 import MyResults from "./pages/MyResults";
+import Analytics from "./pages/Analytics";
 import NotFound from "./pages/NotFound";
 import { DashboardLayout } from "./components/layout/DashboardLayout";
 import Profile from "./pages/Profile";
@@ -25,6 +28,7 @@ import Settings from "./pages/Settings";
 import { UserSettingsProvider } from "./contexts/UserSettingsContext";
 import { ThemeProvider } from "next-themes";
 import { Loader2 } from "lucide-react";
+import { DueRemindersAlert } from "@/components/layout/DueRemindersAlert";
 
 const queryClient = new QueryClient();
 
@@ -68,8 +72,32 @@ function AppRoutes() {
       
       {/* Protected Routes */}
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route
+        path="/analytics"
+        element={
+          <ProtectedRoute allowedRoles={['professor', 'student', 'admin']}>
+            <Analytics />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route
+        path="/announcements"
+        element={
+          <ProtectedRoute allowedRoles={['professor', 'student', 'admin']}>
+            <AnnouncementsHub />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/courses/:courseId/announcements"
+        element={
+          <ProtectedRoute allowedRoles={['professor', 'student', 'admin']}>
+            <CourseAnnouncements />
+          </ProtectedRoute>
+        }
+      />
       
       {/* Professor Routes */}
       <Route path="/courses" element={<ProtectedRoute allowedRoles={['professor', 'admin']}><Courses /></ProtectedRoute>} />
@@ -103,6 +131,7 @@ const App = () => (
             <Toaster />
             <Sonner />
             <BrowserRouter>
+              <DueRemindersAlert />
               <AppRoutes />
             </BrowserRouter>
           </TooltipProvider>

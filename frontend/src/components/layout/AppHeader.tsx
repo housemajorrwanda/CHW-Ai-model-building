@@ -22,12 +22,15 @@ import {
   Search,
   ClipboardList,
   BarChart3,
+  LineChart,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import { NotificationsBell } from '@/components/layout/NotificationsBell';
 
 const professorNav = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+  { label: 'Analytics', icon: LineChart, path: '/analytics' },
   { label: 'My Courses', icon: BookOpen, path: '/courses' },
   { label: 'Exams', icon: FileText, path: '/exams' },
   { label: 'Submissions', icon: ClipboardList, path: '/submissions' },
@@ -35,6 +38,7 @@ const professorNav = [
 
 const studentNav = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+  { label: 'Analytics', icon: LineChart, path: '/analytics' },
   { label: 'Browse Courses', icon: Search, path: '/browse-courses' },
   { label: 'My Exams', icon: FileText, path: '/my-exams' },
   { label: 'My Results', icon: BarChart3, path: '/my-results' },
@@ -43,6 +47,7 @@ const studentNav = [
 const adminNav = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
   { label: 'Users', icon: Users, path: '/users' },
+  { label: 'Analytics', icon: LineChart, path: '/analytics' },
 ];
 
 export function AppHeader() {
@@ -111,6 +116,7 @@ export function AppHeader() {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <NotificationsBell />
           <Sheet>
             <SheetTrigger asChild className="md:hidden">
               <Button variant="ghost" size="icon" aria-label="Open menu">

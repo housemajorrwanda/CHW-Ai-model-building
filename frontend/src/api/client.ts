@@ -131,6 +131,10 @@ export const coursesAPI = {
     return apiCall(`/courses/${courseId}`);
   },
 
+  async getEnrolled() {
+    return apiCall('/courses/enrolled');
+  },
+
   async create(courseData: {
     name: string;
     code: string;
@@ -271,6 +275,150 @@ export const dashboardAPI = {
   async getStats() {
     return apiCall('/dashboard/stats');
   },
+
+  async getAnalytics() {
+    return apiCall('/dashboard/analytics');
+  },
+};
+
+// ============================================================================
+// Course announcements
+// ============================================================================
+
+export type AnnouncementReactionKind = 'like' | 'improve' | 'implement';
+
+export interface AnnouncementComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface CourseAnnouncement {
+  id: string;
+  courseId: string;
+  authorId: string;
+  authorName: string;
+  title: string;
+  body: string;
+  pinned: boolean;
+  createdAt: string;
+  likeCount: number;
+  improveCount: number;
+  implementCount: number;
+  commentCount: number;
+  myLiked: boolean;
+  myImprove: boolean;
+  myImplement: boolean;
+  comments: AnnouncementComment[];
+}
+
+export const announcementsAPI = {
+  async list(courseId: string) {
+    return apiCall<CourseAnnouncement[]>(`/courses/${encodeURIComponent(courseId)}/announcements`);
+  },
+
+  async create(
+    courseId: string,
+    payload: { title: string; body: string; pinned?: boolean }
+  ) {
+    return apiCall<CourseAnnouncement>(`/courses/${encodeURIComponent(courseId)}/announcements`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async update(
+    courseId: string,
+    announcementId: string,
+    payload: { title?: string; body?: string; pinned?: boolean }
+  ) {
+    return apiCall<CourseAnnouncement>(
+      `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(announcementId)}`,
+      { method: 'PATCH', body: JSON.stringify(payload) }
+    );
+  },
+
+  async remove(courseId: string, announcementId: string) {
+    return apiCall<{ message: string }>(
+      `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(announcementId)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async toggleReaction(courseId: string, announcementId: string, kind: AnnouncementReactionKind) {
+    return apiCall<CourseAnnouncement>(
+      `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(announcementId)}/reactions/toggle`,
+      { method: 'POST', body: JSON.stringify({ kind }) }
+    );
+  },
+
+  async addComment(courseId: string, announcementId: string, body: string) {
+    return apiCall<CourseAnnouncement>(
+      `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(announcementId)}/comments`,
+      { method: 'POST', body: JSON.stringify({ body }) }
+    );
+  },
+
+  async deleteComment(courseId: string, announcementId: string, commentId: string) {
+    return apiCall<CourseAnnouncement>(
+      `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(announcementId)}/comments/${encodeURIComponent(commentId)}`,
+      { method: 'DELETE' }
+    );
+  },
+};
+
+// ============================================================================
+// Notifications API
+// ============================================================================
+
+export const notificationsAPI = {
+  async getFeed(limit = 80) {
+    return apiCall(`/notifications?limit=${limit}`);
+  },
+
+  async markRead(notificationId: string) {
+    return apiCall(`/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'PATCH',
+    });
+  },
+
+  async markAllRead() {
+    return apiCall('/notifications/read-all', { method: 'POST' });
+  },
+};
+
+// ============================================================================
+// Reminders API (personal schedule from bell)
+// ============================================================================
+
+export const remindersAPI = {
+  async getDue() {
+    return apiCall('/reminders/due');
+  },
+
+  async schedule(payload: {
+    sourceKey: string;
+    title: string;
+    body?: string;
+    link?: string;
+    userNote?: string;
+    remindAt: string;
+    repeat: 'none' | 'daily' | 'weekly' | 'monthly';
+  }) {
+    return apiCall<{ id: string }>('/reminders/schedule', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async acknowledge(reminderId: string) {
+    return apiCall<{ ok: boolean }>(
+      `/reminders/scheduled/${encodeURIComponent(reminderId)}/acknowledge`,
+      { method: 'POST' }
+    );
+  },
 };
 
 // ============================================================================
@@ -280,9 +428,12 @@ export const dashboardAPI = {
 export const api = {
   auth: authAPI,
   courses: coursesAPI,
+  announcements: announcementsAPI,
   exams: examsAPI,
   submissions: submissionsAPI,
   dashboard: dashboardAPI,
+  notifications: notificationsAPI,
+  reminders: remindersAPI,
 };
 
 export default api;

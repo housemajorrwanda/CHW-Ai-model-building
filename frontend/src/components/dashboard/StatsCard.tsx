@@ -10,7 +10,7 @@ interface StatsCardProps {
     value: number;
     isPositive: boolean;
   };
-  variant?: 'default' | 'primary' | 'accent' | 'warning';
+  variant?: 'default' | 'primary' | 'accent' | 'warning' | 'softRose' | 'softApricot' | 'softLilac' | 'softSky';
 }
 
 export function StatsCard({ title, value, subtitle, icon: Icon, trend, variant = 'default' }: StatsCardProps) {
@@ -23,6 +23,14 @@ export function StatsCard({ title, value, subtitle, icon: Icon, trend, variant =
       'border-emerald-200/90 bg-gradient-to-br from-emerald-50/95 to-teal-50/30 dark:from-emerald-950/40 dark:border-emerald-900/50',
     warning:
       'border-amber-200/90 bg-gradient-to-br from-amber-50/95 to-orange-50/20 dark:from-amber-950/30 dark:border-amber-900/50',
+    softRose:
+      'border-rose-200/80 bg-gradient-to-br from-rose-50/95 via-white to-rose-50/40 dark:from-rose-950/35 dark:border-rose-900/45',
+    softApricot:
+      'border-orange-200/70 bg-gradient-to-br from-orange-50/90 via-white to-amber-50/35 dark:from-orange-950/30 dark:border-orange-900/40',
+    softLilac:
+      'border-violet-200/70 bg-gradient-to-br from-violet-50/80 via-white to-fuchsia-50/25 dark:from-violet-950/35 dark:border-violet-900/45',
+    softSky:
+      'border-sky-200/75 bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/30 dark:from-sky-950/30 dark:border-sky-900/40',
   };
 
   const iconVariants = {
@@ -30,6 +38,10 @@ export function StatsCard({ title, value, subtitle, icon: Icon, trend, variant =
     primary: 'bg-violet-600 text-white shadow-md shadow-violet-500/25',
     accent: 'bg-emerald-600 text-white shadow-md shadow-emerald-500/25',
     warning: 'bg-amber-500 text-white shadow-md shadow-amber-500/25',
+    softRose: 'bg-rose-400/90 text-white shadow-sm dark:bg-rose-600/80',
+    softApricot: 'bg-orange-400/90 text-white shadow-sm dark:bg-orange-600/80',
+    softLilac: 'bg-violet-500/90 text-white shadow-sm dark:bg-violet-600/80',
+    softSky: 'bg-sky-500/90 text-white shadow-sm dark:bg-sky-600/80',
   };
 
   return (

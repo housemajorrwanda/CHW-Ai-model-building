@@ -22,6 +22,8 @@ export interface Question {
   finalAnswer: string;
   finalAnswerLatex: string;
   outlineLevel: number;
+  /** Short label for the left outline (e.g. "Linear equations"). Optional. */
+  outlineTitle?: string;
   parentQuestionId?: string;
 }
 
@@ -62,9 +64,15 @@ export interface GoldStep {
 interface QuestionBuilderProps {
   questions: Question[];
   onQuestionsChange: (questions: Question[]) => void;
+  /** When false, hide the slide-out preview (e.g. when the parent page has a dedicated Preview tab). */
+  enableInlinePreview?: boolean;
 }
 
-export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilderProps) {
+export function QuestionBuilder({
+  questions,
+  onQuestionsChange,
+  enableInlinePreview = true,
+}: QuestionBuilderProps) {
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
@@ -85,6 +93,7 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
       finalAnswer: '',
       finalAnswerLatex: '',
       outlineLevel: 1,
+      outlineTitle: '',
     };
     onQuestionsChange([...questions, newQuestion]);
     setActiveQuestionId(newQuestion.id);
@@ -115,6 +124,7 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
             finalAnswer: '',
             finalAnswerLatex: '',
             outlineLevel: q.outlineLevel + 1,
+            outlineTitle: '',
             parentQuestionId: parentId,
           };
           newSubId = newSub.id;
@@ -197,19 +207,22 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200/80 bg-gradient-to-r from-stone-50/90 to-violet-50/20 px-4 py-3 dark:border-stone-800 dark:from-stone-950/80 dark:to-violet-950/20 sm:px-5">
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={addQuestion} size="sm" className="shadow-sm">
+          <Button type="button" onClick={addQuestion} size="sm" className="shadow-sm">
             <Plus className="mr-2 h-4 w-4" />
             Add question
           </Button>
-          <Button
-            onClick={() => setShowPreview(!showPreview)}
-            variant="outline"
-            size="sm"
-            className="border-stone-200 bg-background/80 dark:border-stone-700"
-          >
-            <Eye className="mr-2 h-4 w-4" />
-            {showPreview ? 'Hide' : 'Show'} preview
-          </Button>
+          {enableInlinePreview && (
+            <Button
+              type="button"
+              onClick={() => setShowPreview(!showPreview)}
+              variant="outline"
+              size="sm"
+              className="border-stone-200 bg-background/80 dark:border-stone-700"
+            >
+              <Eye className="mr-2 h-4 w-4" />
+              {showPreview ? 'Hide' : 'Show'} preview
+            </Button>
+          )}
         </div>
         <div className="text-sm tabular-nums text-muted-foreground">
           <span className="font-medium text-stone-700 dark:text-stone-200">{questions.length}</span>{' '}
@@ -221,6 +234,7 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
       <div className="flex-1 flex overflow-hidden relative">
         {/* Sidebar Toggle Button */}
         <Button
+          type="button"
           variant="ghost"
           size="icon"
           className="absolute left-0 top-1/2 -translate-y-1/2 z-10 h-8 w-8 bg-background border border-r-0 rounded-r-lg shadow-sm"
@@ -232,7 +246,7 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
 
         {/* Question List - Outline */}
         <div
-          className={`overflow-y-auto border-r border-stone-200/70 bg-stone-50/40 transition-all duration-300 dark:border-stone-800 dark:bg-stone-950/30 ${sidebarCollapsed ? 'w-0 overflow-hidden' : 'w-64'}`}
+          className={`overflow-y-auto border-r border-stone-200/70 bg-stone-50/40 transition-all duration-300 dark:border-stone-800 dark:bg-stone-950/30 ${sidebarCollapsed ? 'w-0 overflow-hidden' : 'w-72 min-w-[12rem] sm:min-w-[18rem]'}`}
         >
           {!sidebarCollapsed && (
             <QuestionList
@@ -274,7 +288,7 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
                   Questions appear in the outline on the left. Select one to edit text, points, and gold solutions—or
                   add a new question to get started.
                 </p>
-                <Button onClick={addQuestion} size="lg" className="mt-6 shadow-md">
+                <Button type="button" onClick={addQuestion} size="lg" className="mt-6 shadow-md">
                   <Plus className="mr-2 h-4 w-4" />
                   Add question
                 </Button>
@@ -284,7 +298,7 @@ export function QuestionBuilder({ questions, onQuestionsChange }: QuestionBuilde
         </div>
 
         {/* Preview Panel */}
-        {showPreview && (
+        {enableInlinePreview && showPreview && (
           <div className="w-96 overflow-y-auto border-l border-stone-200/70 bg-stone-50/30 dark:border-stone-800 dark:bg-stone-950/20">
             <PreviewPanel questions={questions} activeQuestionId={activeQuestionId} />
           </div>

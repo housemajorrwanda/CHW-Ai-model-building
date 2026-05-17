@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { MathText } from '@/components/ui/MathText';
 import { RichContentViewer } from '@/components/exam-taker/RichContentViewer';
 import type { Question } from './QuestionBuilder';
+import { questionOutlineLabel } from './questionOutlineLabel';
 
 interface PreviewPanelProps {
   questions: Question[];
@@ -21,11 +22,16 @@ export function PreviewPanel({ questions, activeQuestionId }: PreviewPanelProps)
       <div key={question.id} className={cn('space-y-2', isActive && 'ring-2 ring-primary/20 rounded-lg p-2')}>
         {/* Question Header */}
         <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Badge variant={isActive ? 'default' : 'secondary'}>
-              Q{questionNumber}
-            </Badge>
-            <span className="text-xs text-muted-foreground">{question.points} pts</span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <Badge variant={isActive ? 'default' : 'secondary'}>
+                Q{questionNumber}
+              </Badge>
+              <span className="text-xs text-muted-foreground">{question.points} pts</span>
+            </div>
+            <span className="truncate text-sm text-muted-foreground sm:ml-1" title={questionOutlineLabel(question)}>
+              {questionOutlineLabel(question)}
+            </span>
           </div>
           {question.questionType === 'multi-part' && (
             <Badge variant="outline" className="text-xs">

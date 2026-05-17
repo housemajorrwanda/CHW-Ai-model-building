@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -18,10 +18,10 @@ import {
   Clock,
   Eye,
   Calendar,
+  Megaphone,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Separator } from '@/components/ui/separator';
-import { Link } from 'react-router-dom';
 import { format } from 'date-fns';
 
 function CourseExamsList({ courseId }: { courseId: string }) {
@@ -197,10 +197,18 @@ export default function CourseDetail() {
               )}
             </div>
           </div>
-          <Button onClick={() => navigate(`/exams/new?courseId=${courseId}`)}>
-            <FileText className="h-4 w-4 mr-2" />
-            Create Exam
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" asChild className="rounded-xl">
+              <Link to={`/courses/${courseId}/announcements`}>
+                <Megaphone className="h-4 w-4 mr-2" />
+                Announcements
+              </Link>
+            </Button>
+            <Button onClick={() => navigate(`/exams/new?courseId=${courseId}`)} className="rounded-xl">
+              <FileText className="h-4 w-4 mr-2" />
+              Create Exam
+            </Button>
+          </div>
         </div>
 
         {/* Stats Cards */}

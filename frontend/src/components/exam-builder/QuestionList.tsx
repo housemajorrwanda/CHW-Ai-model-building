@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronRight, Plus, Trash2, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Question } from './QuestionBuilder';
+import { questionOutlineLabel } from './questionOutlineLabel';
 
 interface QuestionListProps {
   questions: Question[];
@@ -69,15 +70,18 @@ export function QuestionList({
             className="flex-1 flex items-center gap-2"
             onClick={() => onSelect(question.id)}
           >
-            <FileText className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">
+            <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 text-left">
               {level > 0 ? (
-                <span className="text-muted-foreground">
-                  {question.number}. {question.text || '(Untitled)'}
+                <span className="block text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground/80">({question.number})</span>{' '}
+                  <span className="break-words">{questionOutlineLabel(question, 48)}</span>
                 </span>
               ) : (
-                <span>
-                  Q{question.number}: {question.text || '(Untitled)'}
+                <span className="block text-sm leading-snug">
+                  <span className="font-semibold text-foreground">Q{question.number}</span>
+                  <span className="text-muted-foreground font-normal"> · </span>
+                  <span className="font-medium break-words">{questionOutlineLabel(question)}</span>
                 </span>
               )}
             </span>

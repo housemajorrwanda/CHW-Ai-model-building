@@ -1,7 +1,8 @@
 import io
+import logging
 import re
 from dataclasses import dataclass
-from typing import List, Sequence, Optional
+from typing import List, Sequence, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -9,11 +10,30 @@ import pytesseract
 from PIL import Image, ImageOps, ImageFilter
 from pdf2image import convert_from_bytes
 
+logger = logging.getLogger(__name__)
+
 try:
     import easyocr
     EASYOCR_AVAILABLE = True
 except ImportError:
     EASYOCR_AVAILABLE = False
+
+try:
+    from .cloud_ocr import CloudOCRManager
+except Exception:  # pragma: no cover - cloud module is optional
+    CloudOCRManager = None  # type: ignore
+
+try:
+    from .local_handwriting import (
+        get_trocr_reader_if_enabled,
+        trocr_runtime_available,
+    )
+except Exception:  # pragma: no cover - optional ML deps
+    def get_trocr_reader_if_enabled():  # type: ignore[misc]
+        return None
+
+    def trocr_runtime_available() -> bool:  # type: ignore[misc]
+        return False
 
 
 @dataclass
@@ -48,6 +68,23 @@ class OCRProcessor:
             except Exception as e:
                 print(f"EasyOCR initialization failed: {e}")
                 self.use_easyocr = False
+
+        # Cloud OCR (Mathpix / Google Vision / Azure Read) — primary when configured.
+        # Local engines are kept as a fallback so the system stays usable without an
+        # API key, but they cannot match a dedicated handwriting/math OCR service.
+        self.cloud = CloudOCRManager() if CloudOCRManager else None
+        if self.cloud and self.cloud.active_provider_name:
+            logger.info(
+                "Cloud OCR provider active: %s (handwriting/math)",
+                self.cloud.active_provider_name,
+            )
+
+        # Local TrOCR (microsoft/trocr-small-handwritten by default + fhswf math).
+        # Disabled with USE_TROCR=0. Lazy-loads weights on first use.
+        self.trocr = get_trocr_reader_if_enabled()
+        self.trocr_runtime_available = trocr_runtime_available()
+        if self.trocr is not None:
+            logger.info("Local TrOCR handwriting engine enabled (model loads on first use).")
 
     # ── Direct PDF text extraction (no OCR needed for typed PDFs) ────────────
 
@@ -88,12 +125,22 @@ class OCRProcessor:
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
-    def extract_steps_from_file(self, file_bytes: bytes, filename: str) -> OCRResult:
+    def extract_steps_from_file(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        *,
+        fast: bool = False,
+    ) -> OCRResult:
         """
         Extract answer steps from an image or PDF file.
 
         For PDFs: tries direct text extraction first (perfect for typed answers).
         Falls back to image-based OCR when the PDF is scanned / handwritten.
+
+        When `fast=True`, the slower local TrOCR model is skipped (used during
+        the live PDF routing preview where we just need a quick excerpt).
+        Submission-time grading should call with the default `fast=False`.
         """
         lower = filename.lower()
 
@@ -135,17 +182,10 @@ class OCRProcessor:
             if self._text_is_clean(direct):
                 text = direct
                 previews.append(self._pil_to_png_bytes(self._light_preprocess(image)))
-            elif self.use_easyocr:
+            else:
                 light = self._light_preprocess(image)
                 previews.append(self._pil_to_png_bytes(light))
-                text = self._run_easyocr(light)
-                if len(text.strip()) < 4:
-                    heavy = self._heavy_preprocess(image)
-                    text = self._run_ocr(heavy)
-            else:
-                heavy = self._heavy_preprocess(image)
-                previews.append(self._pil_to_png_bytes(heavy))
-                text = self._run_ocr(heavy)
+                text = self._ocr_page_handwriting(image, fast=fast)
 
             combined_text.append(text.strip())
             extracted_steps.extend(self._segment_steps(text))
@@ -180,8 +220,8 @@ class OCRProcessor:
         """
         gray = ImageOps.grayscale(image)
 
-        # Upscale images that are too small for reliable OCR
-        min_width = 1200
+        # Upscale images that are too small for reliable OCR (handwriting benefits a lot)
+        min_width = 2200
         if gray.width < min_width:
             scale = min_width / gray.width
             gray = gray.resize(
@@ -218,6 +258,27 @@ class OCRProcessor:
         # Return as RGB so EasyOCR can use colour channels if needed
         pil = Image.fromarray(np_img, mode='L').convert('RGB')
         return pil
+
+    def _high_contrast_rgb(self, image: Image.Image) -> Image.Image:
+        """Second EasyOCR pass: stretch contrast for faint pencil / gray scans."""
+        np_img = self._base_normalise(image)
+        np_img = cv2.normalize(np_img, None, 0, 255, cv2.NORM_MINMAX)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        np_img = clahe.apply(np_img)
+        # Mild sharpen to emphasize strokes
+        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]], dtype=np.float32)
+        sharp = cv2.filter2D(np_img, -1, kernel)
+        sharp = np.clip(sharp, 0, 255).astype(np.uint8)
+        return Image.fromarray(sharp, mode="L").convert("RGB")
+
+    def _soft_binarize(self, image: Image.Image) -> Image.Image:
+        """Otsu binarisation — often preserves pencil strokes better than adaptive thresh."""
+        np_img = self._base_normalise(image)
+        np_img = cv2.GaussianBlur(np_img, (3, 3), 0)
+        _, binary = cv2.threshold(np_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if np.mean(binary) < 128:
+            binary = cv2.bitwise_not(binary)
+        return Image.fromarray(binary.astype(np.uint8), mode="L")
 
     # ── Heavy preprocessing (for Tesseract) ──────────────────────────────────
 
@@ -260,6 +321,166 @@ class OCRProcessor:
             binary = cv2.bitwise_not(binary)
 
         return Image.fromarray(binary.astype(np.uint8), mode='L')
+
+    @staticmethod
+    def _ocr_quality_score(text: str) -> float:
+        """
+        Heuristic 0..1: prefer math-like, letter-dense output; penalize repetitive OCR junk.
+        Used to pick the best among EasyOCR / Tesseract / preprocessing variants.
+        """
+        if not text:
+            return 0.0
+        s = text.strip()
+        n = len(s)
+        if n < 4:
+            return 0.0
+        alnum = sum(1 for c in s if c.isalnum())
+        mathish = sum(
+            1
+            for c in s
+            if c in "+-*/=()[]{}^'′·•∧∨¬⊕×÷≤≥≠°"
+        )
+        # Boolean-style identifiers (A, B', etc.)
+        boolish = len(re.findall(r"\b[A-Z]\b", s))
+        boolish += s.count("A'") + s.count("B'") + s.count("C'")
+        words = len(re.findall(r"[A-Za-z]{4,}", s))
+        junk = len(re.findall(r"\bee\b|\boo\b|eee|ooo", s.lower()))
+        score = 0.38 * (alnum / n)
+        score += 0.18 * min(1.0, (mathish / max(n, 1)) * 12.0)
+        score += 0.14 * min(1.0, boolish / max(n // 25, 1))
+        score += 0.22 * min(1.0, words / max(n // 60, 1))
+        score -= 0.15 * min(1.0, junk / max(n // 40, 1))
+        return float(max(0.0, min(1.0, score)))
+
+    def _post_filter_scan_lines(self, text: str) -> str:
+        """Drop scanner watermarks and border-noise lines (robust to OCR noise)."""
+        if not text:
+            return text
+        out: List[str] = []
+        for line in text.splitlines():
+            sl = line.strip()
+            # Collapse OCR noise (primes / dots / spaces between letters) so brand
+            # names still match when an over-eager prime detector sprinkles
+            # `c'a'm'sca'n'n'e'r` everywhere.
+            normalised = re.sub(r"[^A-Za-z]+", "", sl).lower()
+            if normalised and re.search(
+                r"(camscanner|scannedwith|adobescan|tinyscanner|microsoftlens|"
+                r"geniusscan|scannerapp|notescan|officelens|clearscanner)",
+                normalised,
+            ):
+                continue
+            if sl and re.fullmatch(r"[|_\-=\s.·•']+", sl):
+                continue
+            out.append(line)
+        return "\n".join(out).strip()
+
+    def _ocr_page_handwriting(self, image: Image.Image, *, fast: bool = False) -> str:
+        """
+        Run multiple OCR variants and keep the best-scoring transcript.
+        Handwritten math is inherently noisy; ensemble + scoring beats a single pass.
+
+        When a cloud math/handwriting provider is configured (Mathpix etc.) we use it
+        as the primary transcription — that is the only realistic way to read student
+        handwriting reliably. Local ensemble stays as a fallback so the system still
+        works without an API key.
+        """
+        # ── Cloud math/handwriting OCR (preferred when configured) ────────────
+        if self.cloud and self.cloud.active_provider_name:
+            try:
+                upscaled = self._upscale_for_cloud(image)
+                cloud_res = self.cloud.recognize_pil(upscaled)
+            except Exception as ex:  # pragma: no cover - network errors
+                logger.warning("Cloud OCR failed, falling back to local: %s", ex)
+                cloud_res = None
+            if cloud_res and cloud_res.text.strip():
+                cleaned = self._post_filter_scan_lines(cloud_res.text)
+                if cleaned.strip():
+                    return cleaned
+
+        # ── Local TrOCR handwriting model (free, USE_TROCR=1) ─────────────────
+        # We run it before the EasyOCR / Tesseract ensemble because on real
+        # student handwriting it usually wins. If its output is empty or clearly
+        # low-quality, we still fall through to the older ensemble.
+        # Skipped in `fast` mode (live PDF preview) — TrOCR on CPU is ~seconds per
+        # line, which is fine for submission-time grading but too slow for preview.
+        trocr_cleaned = ""
+        trocr_score = 0.0
+        if self.trocr is not None:
+            try:
+                upscaled = self._upscale_for_cloud(image)  # same target size works well
+                # `fast=True` runs the small TrOCR prose model on the first
+                # ~14 lines only — fast enough for the live PDF-routing
+                # preview while still real handwriting OCR, not Tesseract.
+                trocr_text = self.trocr.read_page(upscaled, fast=fast)
+            except Exception as ex:  # pragma: no cover - model failure
+                logger.warning("TrOCR failed, falling back to local ensemble: %s", ex)
+                trocr_text = ""
+            if trocr_text.strip():
+                trocr_cleaned = self._post_filter_scan_lines(trocr_text)
+                if trocr_cleaned.strip():
+                    trocr_score = self._ocr_quality_score(trocr_cleaned)
+                    # In fast mode there is no ensemble pass to compare against,
+                    # so accept the TrOCR result directly and return early.
+                    if fast:
+                        return trocr_cleaned
+
+        # ── Local ensemble (EasyOCR / Tesseract) ───────────────────────────────
+        light = self._light_preprocess(image)
+        hc = self._high_contrast_rgb(image)
+        soft = self._soft_binarize(image)
+        heavy = self._heavy_preprocess(image)
+        gray_l = Image.fromarray(self._base_normalise(image), mode="L")
+
+        candidates: List[str] = []
+        if self.use_easyocr and self.easyocr_reader:
+            t_a = self._run_easyocr(light)
+            t_b = self._run_easyocr(hc)
+            t_c = self._run_easyocr_math_restricted(light)
+            for t in (t_a, t_b, t_c):
+                if t.strip():
+                    candidates.append(t.strip())
+
+        best_easy = max((self._ocr_quality_score(c) for c in candidates), default=0.0)
+        if best_easy < 0.52 or not candidates:
+            for img in (soft, heavy, gray_l):
+                t = self._run_ocr(img)
+                if t.strip():
+                    candidates.append(t.strip())
+
+        ensemble_text = ""
+        ens_score = 0.0
+        if candidates:
+            best = max(candidates, key=self._ocr_quality_score)
+            ensemble_text = self._post_filter_scan_lines(best)
+            if ensemble_text.strip():
+                ens_score = self._ocr_quality_score(ensemble_text)
+
+        # Prefer TrOCR when it is clearly good; when it is only mediocre, let the
+        # classical ensemble win if it scores noticeably higher (reduces stuck
+        # wrong-line crops from the neural line splitter).
+        if trocr_cleaned.strip():
+            if trocr_score >= 0.48:
+                return trocr_cleaned
+            if trocr_score >= 0.34 and trocr_score + 0.06 >= ens_score:
+                return trocr_cleaned
+            if ens_score > trocr_score + 0.07 and ensemble_text.strip():
+                return ensemble_text
+            return trocr_cleaned
+
+        return ensemble_text
+
+    def _upscale_for_cloud(self, image: Image.Image) -> Image.Image:
+        """
+        Cloud providers want clean, large images. Mathpix specifically prefers
+        ≥ ~1000-1500px on the long edge for handwriting; over ~3000px wastes bytes.
+        """
+        target = 2600
+        if image.width >= target or image.height >= target:
+            return image.convert("RGB")
+        long_side = max(image.width, image.height)
+        scale = target / float(long_side)
+        new_size = (int(image.width * scale), int(image.height * scale))
+        return image.convert("RGB").resize(new_size, Image.Resampling.LANCZOS)
 
     # ── Kept for backward compatibility but no longer called ─────────────────
 
@@ -323,6 +544,12 @@ class OCRProcessor:
                     f"Error: {str(e)}. Try installing EasyOCR instead: pip install easyocr"
                 )
         
+        def _letter_ratio(s: str) -> float:
+            if not s:
+                return 0.0
+            letters = sum(1 for c in s if c.isalnum())
+            return letters / len(s)
+
         # If we got very little text, try alternative PSM modes
         if len(text) < 5:
             # Try single line mode (often better for math)
@@ -332,7 +559,7 @@ class OCRProcessor:
                 f"--oem 3 --psm 11", # Sparse text
                 f"--oem 3 --psm 4",  # Single column
             ]
-            
+
             for alt_config in alt_configs:
                 try:
                     alt_text = pytesseract.image_to_string(
@@ -343,9 +570,33 @@ class OCRProcessor:
                     if len(alt_text) > len(text):
                         text = alt_text
                         break
-                except:
+                except Exception:
                     continue
-        
+        # Handwriting / noisy scans: long output can still be garbage; try sparse / OSD-free modes
+        elif len(text) > 20 and _letter_ratio(text) < 0.35:
+            alt_configs = [
+                "--oem 3 --psm 11",  # Sparse text (often better for uneven handwriting)
+                "--oem 3 --psm 12",  # Sparse with OSD
+                "--oem 3 --psm 13",  # Raw line
+            ]
+            best = text
+            best_lr = _letter_ratio(text)
+            for alt_config in alt_configs:
+                try:
+                    alt_text = pytesseract.image_to_string(
+                        image,
+                        lang=self.tesseract_lang,
+                        config=alt_config,
+                    ).strip()
+                    if not alt_text:
+                        continue
+                    lr = _letter_ratio(alt_text)
+                    if lr > best_lr + 0.05 or (lr >= best_lr and len(alt_text) > len(best) * 1.1):
+                        best, best_lr = alt_text, lr
+                except Exception:
+                    continue
+            text = best
+
         return text
     
     def _run_easyocr(self, image: Image.Image) -> str:
@@ -358,13 +609,24 @@ class OCRProcessor:
         np_img = np.array(image)
 
         # paragraph=False gives finer-grained bounding boxes, better for multi-line
-        results = self.easyocr_reader.readtext(np_img, paragraph=False)
+        try:
+            results = self.easyocr_reader.readtext(
+                np_img,
+                paragraph=False,
+                mag_ratio=2.0,
+                text_threshold=0.55,
+                low_text=0.32,
+                link_threshold=0.35,
+                contrast_ths=0.08,
+            )
+        except TypeError:
+            results = self.easyocr_reader.readtext(np_img, paragraph=False)
 
         # Collect detected text sorted top-to-bottom by bounding box y-coordinate
         detections = []
         for item in results:
             bbox, text, confidence = item
-            if confidence > 0.2 and text.strip():    # lower threshold for handwriting
+            if confidence > 0.18 and text.strip():  # permissive for faint handwriting
                 # Use the top-left y coordinate for ordering
                 top_y = min(pt[1] for pt in bbox)
                 detections.append((top_y, text.strip()))
@@ -376,6 +638,49 @@ class OCRProcessor:
 
         # If EasyOCR returned almost nothing, let the caller fall back to Tesseract
         return combined
+
+    def _run_easyocr_math_restricted(self, image: Image.Image) -> str:
+        """
+        Extra EasyOCR pass with an allowlist biased toward Latin letters, digits, and math
+        punctuation — reduces random symbols / emoji from phone scans.
+        """
+        if not self.easyocr_reader:
+            return ""
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        np_img = np.array(image)
+        # ¬ ∧ ∨ left out (EasyOCR often misreads anyway); instructor can use LaTeX in typed mode
+        allow = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            "0123456789=()'+\\-^*/[]{}.,:;|& "
+        )
+        try:
+            results = self.easyocr_reader.readtext(
+                np_img,
+                paragraph=False,
+                allowlist=allow,
+                mag_ratio=2.0,
+                text_threshold=0.55,
+                low_text=0.32,
+                link_threshold=0.35,
+                contrast_ths=0.08,
+            )
+        except TypeError:
+            try:
+                results = self.easyocr_reader.readtext(
+                    np_img, paragraph=False, allowlist=allow
+                )
+            except TypeError:
+                return ""
+
+        detections: List[Tuple[float, str]] = []
+        for item in results:
+            bbox, text, confidence = item
+            if confidence > 0.18 and text.strip():
+                top_y = min(pt[1] for pt in bbox)
+                detections.append((top_y, text.strip()))
+        detections.sort(key=lambda x: x[0])
+        return "\n".join(t for _, t in detections)
 
     def _pil_to_png_bytes(self, image: Image.Image) -> bytes:
         buffer = io.BytesIO()
