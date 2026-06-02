@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { coursesAPI, examsAPI } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -29,11 +29,40 @@ import {
 import { toast } from 'sonner';
 import { QuestionBuilder, Question } from '@/components/exam-builder/QuestionBuilder';
 import { PreviewPanel } from '@/components/exam-builder/PreviewPanel';
+import { AnswerKeyUpload } from '@/components/exam-builder/AnswerKeyUpload';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 
 type WorkspaceTab = 'build' | 'details' | 'preview';
+
+function mapGoldStepsForSave(steps: Question['goldSolutionSteps']) {
+  return (steps ?? []).map((step, stepIdx) => ({
+    stepNumber: stepIdx + 1,
+    description: step.description,
+    expression: step.expression,
+    latex: step.latex,
+    points: step.points,
+    required: step.required,
+  }));
+}
+
+function mapSubQuestionsForSave(subs: Question[], parentId: string): any[] {
+  return (subs ?? []).map((sub, subIdx) => ({
+    number: sub.number ?? subIdx + 1,
+    text: sub.text,
+    points: sub.points,
+    questionType: sub.questionType || 'standard',
+    richContent: sub.richContent,
+    outlineLevel: sub.outlineLevel || 2,
+    outlineTitle: (sub.outlineTitle || '').trim() || undefined,
+    parentQuestionId: sub.parentQuestionId || parentId,
+    subQuestions: mapSubQuestionsForSave(sub.subQuestions ?? [], sub.id),
+    goldSolutionSteps: mapGoldStepsForSave(sub.goldSolutionSteps),
+    finalAnswer: sub.finalAnswer,
+    finalAnswerLatex: sub.finalAnswerLatex,
+  }));
+}
 
 /** Convert API ISO datetime to `datetime-local` value in the user's timezone. */
 function isoToDatetimeLocal(iso: string | null | undefined): string {
@@ -46,6 +75,7 @@ function isoToDatetimeLocal(iso: string | null | undefined): string {
 
 export default function CreateExam() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { isAuthenticated } = useAuth();
   const [searchParams] = useSearchParams();
   const { id: examIdFromRoute } = useParams<{ id: string }>();
@@ -110,7 +140,7 @@ export default function CreateExam() {
       questionType: apiQ.questionType || 'standard',
       points: apiQ.points || 10,
       subQuestions: (apiQ.subQuestions || []).map((sub: any, idx: number) =>
-        transformApiQuestionToQuestion(sub, idx + 1, apiQ.id)
+        transformApiQuestionToQuestion(sub, sub.number ?? idx + 1, apiQ.id)
       ),
       attachments: apiQ.attachments || [],
       embeddedContent: apiQ.embeddedContent || [],
@@ -142,7 +172,7 @@ export default function CreateExam() {
       setDurationInput(String(examData.duration ?? 120));
 
       const transformedQuestions = (examData.questions || []).map((q: any, idx: number) =>
-        transformApiQuestionToQuestion(q, idx + 1)
+        transformApiQuestionToQuestion(q, q.number ?? idx + 1)
       );
       setQuestions(transformedQuestions);
       setDueDate(isoToDatetimeLocal(examData.dueDate));
@@ -199,8 +229,8 @@ export default function CreateExam() {
         courseId,
         duration: parseInt(durationInput, 10) || duration,
         dueDate: dueDate.trim() ? new Date(dueDate).toISOString() : null,
-        questions: questions.map((q, idx) => ({
-          number: idx + 1,
+        questions: questions.map((q) => ({
+          number: q.number,
           text: q.text,
           points: q.points,
           questionType: q.questionType,
@@ -208,37 +238,11 @@ export default function CreateExam() {
           outlineLevel: q.outlineLevel,
           outlineTitle: (q.outlineTitle || '').trim() || undefined,
           parentQuestionId: q.parentQuestionId,
-          subQuestions: q.subQuestions.map((sub, subIdx) => ({
-            number: subIdx + 1,
-            text: sub.text,
-            points: sub.points,
-            questionType: sub.questionType || 'standard',
-            richContent: sub.richContent,
-            outlineLevel: sub.outlineLevel || 2,
-            outlineTitle: (sub.outlineTitle || '').trim() || undefined,
-            parentQuestionId: sub.parentQuestionId || q.id,
-            goldSolutionSteps: sub.goldSolutionSteps.map((step, stepIdx) => ({
-              stepNumber: stepIdx + 1,
-              description: step.description,
-              expression: step.expression,
-              latex: step.latex,
-              points: step.points,
-              required: step.required,
-            })),
-            finalAnswer: sub.finalAnswer,
-            finalAnswerLatex: sub.finalAnswerLatex,
-          })),
+          subQuestions: mapSubQuestionsForSave(q.subQuestions ?? [], q.id),
           attachments: q.attachments,
           embeddedContent: q.embeddedContent,
           theories: q.theories,
-          goldSolutionSteps: q.goldSolutionSteps.map((step, stepIdx) => ({
-            stepNumber: stepIdx + 1,
-            description: step.description,
-            expression: step.expression,
-            latex: step.latex,
-            points: step.points,
-            required: step.required,
-          })),
+          goldSolutionSteps: mapGoldStepsForSave(q.goldSolutionSteps),
           finalAnswer: q.finalAnswer,
           finalAnswerLatex: q.finalAnswerLatex,
         })),
@@ -399,6 +403,16 @@ export default function CreateExam() {
           Shown on student My exams. Leave empty so the exam has no deadline (overdue rules only apply when a date is set).
         </p>
       </div>
+
+      {isEditMode && examId ? (
+        <AnswerKeyUpload
+          examId={examId}
+          examTitle={title}
+          onApplied={() => {
+            queryClient.invalidateQueries({ queryKey: ['exam', examId] });
+          }}
+        />
+      ) : null}
     </div>
   );
 
@@ -545,7 +559,8 @@ export default function CreateExam() {
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight">Upload from file</h2>
                   <p className="text-sm text-muted-foreground">
-                    We parse questions and solution hints from text or PDF. You can edit everything after import.
+                    We parse questions from text or PDF. Gold answers can stay in the same file, or you can upload a
+                    separate answer key later from the exam page.
                   </p>
                 </div>
               </div>
@@ -618,8 +633,8 @@ export default function CreateExam() {
                     <ul className="space-y-1.5 text-sm text-muted-foreground">
                       <li>Label questions with &quot;Question 1:&quot; or &quot;Q1:&quot;</li>
                       <li>Add points with [5 points]</li>
-                      <li>Use &quot;Gold Solution:&quot; or &quot;Expected Answer:&quot; for model answers</li>
-                      <li>Number steps as &quot;Step 1:&quot; or &quot;1.&quot;</li>
+                      <li>Gold solutions are optional here—you can upload them separately later</li>
+                      <li>If included: use &quot;Gold Solution:&quot; or &quot;Expected Answer:&quot;</li>
                     </ul>
                     <a
                       href="/exam-template.txt"

@@ -172,80 +172,50 @@ class HybridGrader:
         ]
     
     def grade(self, student_steps: List[str]) -> Dict:
-        results = {
-            'evaluations': [],
-            'total_score': 0.0,
-            'max_score': sum(step.points for step in self.gold_steps),
-            'percentage': 0.0,
-            'strategies_used': []
-        }
-        
-        math_result = None
-        ml_result = None
-        
-        if self.math_grader:
-            try:
-                math_result = self.math_grader.grade(student_steps)
-                logger.debug(f"MathGrader: {math_result['total_score']}/{math_result['max_score']}")
-            except Exception as e:
-                logger.warning(f"MathGrader failed: {e}")
-        
-        if self.scoring_engine:
-            try:
-                ml_graded_steps, ml_summary = self.scoring_engine.grade_submission(
-                    student_steps,
-                    self.grading_steps
-                )
-                ml_result = {
-                    'graded_steps': ml_graded_steps,
-                    'summary': ml_summary,
-                    'total_score': ml_summary['total_points_earned'],
-                    'max_score': ml_summary['total_points_possible']
-                }
-                logger.debug(f"ML Grader: {ml_result['total_score']}/{ml_result['max_score']}")
-            except Exception as e:
-                logger.warning(f"ML Grader failed: {e}")
-        
-        if math_result and ml_result:
-            results = self._combine_results(student_steps, math_result, ml_result)
-        elif math_result:
-            results = self._convert_math_result(math_result)
-        elif ml_result:
-            results = self._convert_ml_result(ml_result)
-        else:
-            logger.error("Both grading systems failed")
-            results['evaluations'] = [
-                StepEvaluation(
-                    status=MathStepStatus.INCORRECT,
-                    points_earned=0.0,
-                    feedback="Grading system error"
-                )
-                for _ in student_steps
-            ]
-        
-        results['percentage'] = (
-            (results['total_score'] / results['max_score'] * 100) 
-            if results['max_score'] > 0 else 0.0
+        from grading.step_assigner import grade_with_optimal_assignment
+
+        cleaned = [s.strip() for s in student_steps if s and s.strip()]
+        if not cleaned:
+            return {
+                "evaluations": [],
+                "total_score": 0.0,
+                "max_score": sum(step.points for step in self.gold_steps),
+                "percentage": 0.0,
+                "strategies_used": [],
+                "student_steps_for_storage": [],
+            }
+
+        result = grade_with_optimal_assignment(
+            cleaned,
+            self.gold_steps,
+            question_context=self.question_context or None,
+        )
+        result["strategies_used"] = ["optimal_assignment"] * len(
+            result.get("evaluations") or []
         )
 
-        combined = "\n".join(s.strip() for s in student_steps if s and s.strip()).strip()
+        combined = "\n".join(cleaned).strip()
+        max_score = result.get("max_score") or 0.0
         if (
-            results["total_score"] == 0
-            and results.get("max_score", 0) > 0
+            max_score > 0
+            and result["total_score"] < max_score * 0.45
             and len(combined) >= 40
         ):
             prose = _try_prose_rubric_grade(combined, self.gold_steps)
-            if prose and prose["total_score"] > results["total_score"]:
-                results = prose
-                results["percentage"] = (
-                    (results["total_score"] / results["max_score"] * 100)
-                    if results["max_score"] > 0
-                    else 0.0
+            if prose and prose["total_score"] > result["total_score"]:
+                result = prose
+                result["strategies_used"] = ["prose_rubric"] * len(
+                    result.get("evaluations") or []
                 )
 
-        return results
+        result["percentage"] = (
+            (result["total_score"] / result["max_score"] * 100)
+            if result.get("max_score", 0) > 0
+            else 0.0
+        )
+        return result
     
-    def _combine_results(self, 
+    def _combine_results_legacy(self, 
                         student_steps: List[str],
                         math_result: Dict,
                         ml_result: Dict) -> Dict:

@@ -5,17 +5,7 @@ import { X, ImagePlus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { attachmentsAPI } from '@/lib/api';
 import type { Attachment } from './QuestionBuilder';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-const ORIGIN = API_BASE_URL.replace(/\/api\/?$/, '');
-
-function resolveImageSrc(att: Attachment): string {
-  const p = att.filePath || '';
-  if (p.startsWith('http')) return p;
-  if (p.startsWith('/api/attachments/')) return `${ORIGIN}${p}`;
-  if (p.startsWith('blob:') || p.startsWith('data:')) return p;
-  return `${ORIGIN}${p}`;
-}
+import { AttachmentImage } from '@/components/ui/AttachmentImage';
 
 interface AttachmentsListProps {
   attachments: Attachment[];
@@ -123,8 +113,8 @@ export function AttachmentsList({ attachments, onUpdate }: AttachmentsListProps)
             <div className="p-3 grid grid-cols-2 gap-3">
               {imageAttachments.map((att) => (
                 <div key={att.id} className="relative group rounded-lg overflow-hidden border bg-muted/20">
-                  <img
-                    src={resolveImageSrc(att)}
+                  <AttachmentImage
+                    filePath={att.filePath}
                     alt={att.filename}
                     className="w-full object-contain max-h-48"
                   />

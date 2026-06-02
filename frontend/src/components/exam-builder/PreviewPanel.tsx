@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import { MathText } from '@/components/ui/MathText';
 import { RichContentViewer } from '@/components/exam-taker/RichContentViewer';
 import type { Question } from './QuestionBuilder';
-import { questionOutlineLabel } from './questionOutlineLabel';
+import { AttachmentImage } from '@/components/ui/AttachmentImage';
 
 interface PreviewPanelProps {
   questions: Question[];
@@ -53,12 +53,21 @@ export function PreviewPanel({ questions, activeQuestionId }: PreviewPanelProps)
 
         {/* Attachments */}
         {question.attachments.length > 0 && (
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-2">
             {question.attachments.map((att) => (
-              <Badge key={att.id} variant="outline" className="text-xs">
-                <Image className="h-3 w-3 mr-1" />
-                {att.filename}
-              </Badge>
+              att.attachmentType === 'image' || !att.attachmentType ? (
+                <AttachmentImage
+                  key={att.id}
+                  filePath={att.filePath}
+                  alt={att.filename}
+                  className="max-h-48 max-w-full rounded border object-contain"
+                />
+              ) : (
+                <Badge key={att.id} variant="outline" className="text-xs">
+                  <Image className="h-3 w-3 mr-1" />
+                  {att.filename}
+                </Badge>
+              )
             ))}
           </div>
         )}

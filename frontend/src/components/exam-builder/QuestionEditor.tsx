@@ -37,6 +37,7 @@ import { useEditorLatexCompletion } from '@/hooks/useEditorLatexCompletion';
 import { EditorLatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { FormulaInserter } from './tools/FormulaInserter';
 import { questionOutlineLabel } from './questionOutlineLabel';
+import { plainTextLooksLikeMath, plainTextWithMathToDoc } from '@/lib/plainTextWithMathToDoc';
 
 interface QuestionEditorProps {
   question: Question;
@@ -153,7 +154,12 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
       if (question.richContent) {
         editor.commands.setContent(question.richContent, { emitUpdate: false });
       } else if (question.text) {
-        editor.commands.setContent(`<p>${question.text}</p>`, { emitUpdate: false });
+        const t = question.text;
+        if (plainTextLooksLikeMath(t)) {
+          editor.commands.setContent(plainTextWithMathToDoc(t), { emitUpdate: false });
+        } else {
+          editor.commands.setContent(`<p>${t}</p>`, { emitUpdate: false });
+        }
       } else {
         editor.commands.setContent('', { emitUpdate: false });
       }

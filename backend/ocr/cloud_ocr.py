@@ -129,15 +129,20 @@ class MathpixProvider(CloudOCRProvider):
     name = "mathpix"
     endpoint = "https://api.mathpix.com/v3/text"
 
-    def __init__(self) -> None:
-        self.app_id = os.getenv("MATHPIX_APP_ID", "").strip()
-        self.app_key = os.getenv("MATHPIX_APP_KEY", "").strip()
+    @staticmethod
+    def _credentials() -> tuple[str, str]:
+        return (
+            os.getenv("MATHPIX_APP_ID", "").strip(),
+            os.getenv("MATHPIX_APP_KEY", "").strip(),
+        )
 
     def available(self) -> bool:
-        return bool(self.app_id and self.app_key and requests)
+        app_id, app_key = self._credentials()
+        return bool(app_id and app_key and requests)
 
     def recognize(self, image_bytes: bytes, mime: str = "image/png") -> Optional[CloudOCRResult]:
-        if not self.available():
+        app_id, app_key = self._credentials()
+        if not (app_id and app_key and requests):
             return None
         try:
             b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -151,8 +156,8 @@ class MathpixProvider(CloudOCRProvider):
                 "rm_fonts": True,
             }
             headers = {
-                "app_id": self.app_id,
-                "app_key": self.app_key,
+                "app_id": app_id,
+                "app_key": app_key,
                 "Content-Type": "application/json",
             }
             resp = requests.post(  # type: ignore[union-attr]
@@ -312,6 +317,19 @@ class AzureReadProvider(CloudOCRProvider):
 # ── Manager ─────────────────────────────────────────────────────────────────
 
 
+def _reload_ocr_env() -> None:
+    """Re-read .env so Mathpix keys added while uvicorn is running take effect."""
+    try:
+        from dotenv import load_dotenv
+        from pathlib import Path
+
+        backend = Path(__file__).resolve().parent.parent
+        load_dotenv(backend.parent / ".env", override=True)
+        load_dotenv(backend / ".env", override=True)
+    except Exception:
+        pass
+
+
 class CloudOCRManager:
     """
     Selects the active provider from env. Use `recognize_pil` for callers that
@@ -324,8 +342,12 @@ class CloudOCRManager:
             GoogleVisionProvider(),
             AzureReadProvider(),
         ]
+        self._chosen: Optional[CloudOCRProvider] = None
+        self._refresh_provider()
+
+    def _refresh_provider(self) -> None:
+        _reload_ocr_env()
         choice = (os.getenv("MATH_OCR_PROVIDER") or "").strip().lower()
-        self._chosen: Optional[CloudOCRProvider]
         if choice == "auto" or not choice:
             self._chosen = next((p for p in self._providers if p.available()), None)
         else:
@@ -333,12 +355,22 @@ class CloudOCRManager:
                 (p for p in self._providers if p.name == choice and p.available()),
                 None,
             )
+        if self._chosen:
+            logger.info("Cloud OCR provider active: %s", self._chosen.name)
+        elif choice and choice not in ("auto", ""):
+            logger.warning(
+                "MATH_OCR_PROVIDER=%s but credentials are missing or invalid",
+                choice,
+            )
 
     @property
     def active_provider_name(self) -> Optional[str]:
+        if self._chosen is None:
+            self._refresh_provider()
         return self._chosen.name if self._chosen else None
 
     def status(self) -> dict:
+        self._refresh_provider()
         return {
             "active": self.active_provider_name,
             "available": [p.name for p in self._providers if p.available()],
@@ -346,17 +378,34 @@ class CloudOCRManager:
         }
 
     def recognize_pil(self, image: Image.Image) -> Optional[CloudOCRResult]:
+        if self._chosen is None:
+            self._refresh_provider()
         if not self._chosen:
             return None
+        image = image.convert("RGB")
+        # Mathpix rejects very large PNG payloads — downscale and prefer JPEG for scans.
+        max_edge = 2600
+        long_side = max(image.width, image.height)
+        if long_side > max_edge:
+            scale = max_edge / float(long_side)
+            image = image.resize(
+                (int(image.width * scale), int(image.height * scale)),
+                Image.Resampling.LANCZOS,
+            )
         buf = io.BytesIO()
-        # PNG keeps strokes crisp; JPG halves bytes but adds artefacts that hurt OCR.
-        image.convert("RGB").save(buf, format="PNG", optimize=True)
+        use_jpeg = len(image.tobytes()) > 4_000_000 or max(image.size) > 2200
+        if use_jpeg:
+            image.save(buf, format="JPEG", quality=88, optimize=True)
+            mime = "image/jpeg"
+        else:
+            image.save(buf, format="PNG", optimize=True)
+            mime = "image/png"
         raw = buf.getvalue()
         key = _RESULT_CACHE.key(raw, self._chosen.name)
         cached = _RESULT_CACHE.get(key)
         if cached is not None:
             return cached
-        result = self._chosen.recognize(raw, mime="image/png")
+        result = self._chosen.recognize(raw, mime=mime)
         if result is not None:
             _RESULT_CACHE.put(key, result)
         return result

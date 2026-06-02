@@ -2,13 +2,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { RichContentViewer } from './RichContentViewer';
 import { cn } from '@/lib/utils';
+import { AttachmentImage } from '@/components/ui/AttachmentImage';
 
-interface SubQuestion {
+export interface SubQuestion {
   id: string;
-  number: number;
-  text: string;
+  number?: number;
+  text?: string;
   richContent?: any;
-  points: number;
+  points?: number;
+  outlineTitle?: string | null;
+  subQuestions?: SubQuestion[];
 }
 
 interface QuestionDisplayProps {
@@ -19,20 +22,56 @@ interface QuestionDisplayProps {
   outlineTitle?: string | null;
   attachments?: Array<{ id: string; filePath: string; filename: string; attachmentType?: string }>;
   subQuestions?: SubQuestion[];
+  /** When false, sub-parts are omitted (e.g. parent page renders its own answer fields). */
+  showSubQuestions?: boolean;
   /** When false, hides the top meta row (number / points) so the parent can render its own chrome. */
   showQuestionHeader?: boolean;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-const ORIGIN = API_BASE_URL.replace(/\/api\/?$/, '');
+const subPartLabel = (sub: SubQuestion, idx: number) => {
+  const title = sub.outlineTitle?.trim();
+  if (title) return title;
+  return String.fromCharCode(97 + idx);
+};
 
-function resolveAttachmentSrc(filePath: string): string {
-  if (!filePath) return '';
-  if (filePath.startsWith('http')) return filePath;
-  return `${ORIGIN}${filePath}`;
+function renderSubQuestions(subs: SubQuestion[], depth = 0): JSX.Element {
+  return (
+    <div className={cn('space-y-3', depth > 0 ? 'mt-2 ml-4' : 'mt-2')}>
+      {subs.map((sub, idx) => {
+        const letter = subPartLabel(sub, idx);
+        const nested = sub.subQuestions ?? [];
+        return (
+          <div key={sub.id || `${depth}-${idx}`}>
+            <div
+              className={cn(
+                'flex gap-3 pl-2 border-l-2 border-primary/30',
+                depth > 0 && 'border-primary/20'
+              )}
+            >
+              <span className="font-semibold text-primary shrink-0 min-w-[2rem] pt-0.5">
+                {letter}
+              </span>
+              <div className="flex-1 space-y-1">
+                <RichContentViewer
+                  content={
+                    sub.richContent ||
+                    (typeof (sub.richContent || sub.text) === 'string'
+                      ? dedupeLeadingPartLabel(sub.richContent || sub.text || '', letter.replace(/[().]/g, ''))
+                      : sub.text)
+                  }
+                />
+                <span className="text-xs text-muted-foreground">
+                  [{sub.points ?? 0} {(sub.points ?? 0) === 1 ? 'point' : 'points'}]
+                </span>
+              </div>
+            </div>
+            {nested.length > 0 ? renderSubQuestions(nested, depth + 1) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
-
-const subPartLabel = (idx: number) => String.fromCharCode(97 + idx);
 
 /** Avoid "(a) (a) …" when the stem already includes the part label */
 function dedupeLeadingPartLabel(text: string, letter: string): string {
@@ -51,6 +90,7 @@ export function QuestionDisplay({
   outlineTitle,
   attachments,
   subQuestions,
+  showSubQuestions = true,
   showQuestionHeader = true,
 }: QuestionDisplayProps) {
   const imageAttachments = (attachments ?? []).filter(
@@ -95,9 +135,9 @@ export function QuestionDisplay({
             <p className="text-sm font-medium text-muted-foreground">Figures</p>
             <div className="flex flex-wrap gap-4">
               {imageAttachments.map((att) => (
-                <img
+                <AttachmentImage
                   key={att.id}
-                  src={resolveAttachmentSrc(att.filePath)}
+                  filePath={att.filePath}
                   alt={att.filename}
                   className="max-w-full max-h-64 rounded-lg border object-contain"
                 />
@@ -107,32 +147,7 @@ export function QuestionDisplay({
         )}
 
         {/* Sub-questions (a), (b), (c) … */}
-        {subQuestions && subQuestions.length > 0 && (
-          <div className="space-y-3 mt-2">
-            {subQuestions.map((sub, idx) => (
-              <div
-                key={sub.id || idx}
-                className="flex gap-3 pl-2 border-l-2 border-primary/30"
-              >
-                <span className="font-semibold text-primary shrink-0 w-6 pt-0.5">
-                  ({subPartLabel(idx)})
-                </span>
-                <div className="flex-1 space-y-1">
-                  <RichContentViewer
-                    content={
-                      typeof (sub.richContent || sub.text) === 'string'
-                        ? dedupeLeadingPartLabel(sub.richContent || sub.text, subPartLabel(idx))
-                        : sub.richContent || sub.text
-                    }
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {showSubQuestions && subQuestions && subQuestions.length > 0 && renderSubQuestions(subQuestions)}
       </CardContent>
     </Card>
   );

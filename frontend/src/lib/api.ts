@@ -298,6 +298,41 @@ export const examsAPI = {
     return response.json();
   },
 
+  /** Preview how a separate answer-key file aligns to existing exam questions. */
+  async previewAnswerKey(examId: string, file: File) {
+    const token = getAuthToken();
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    const response = await fetch(`${API_BASE_URL}/exams/${examId}/preview-answer-key`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(typeof err.detail === 'string' ? err.detail : 'Answer key preview failed');
+    }
+    return response.json() as Promise<AnswerKeyPreviewResponse>;
+  },
+
+  /** Apply a separate answer-key file to existing exam questions. */
+  async uploadAnswerKey(examId: string, file: File, overwrite = true) {
+    const token = getAuthToken();
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    formData.append('overwrite', overwrite ? 'true' : 'false');
+    const response = await fetch(`${API_BASE_URL}/exams/${examId}/upload-answer-key`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(typeof err.detail === 'string' ? err.detail : 'Answer key upload failed');
+    }
+    return response.json() as Promise<AnswerKeyUploadResponse>;
+  },
+
   /** Preview how a full-answer PDF will map to exam questions (take-exam flow). */
   async previewAnswerPdf(examId: string, file: File) {
     const token = getAuthToken();
@@ -331,6 +366,47 @@ export const examsAPI = {
     return response.json() as Promise<OcrStatusResponse>;
   },
 };
+
+export interface AnswerKeyPreviewResponse {
+  exam_id: string;
+  exam_title?: string;
+  matched: Array<{
+    question_id: string;
+    question_number: number;
+    path: string;
+    step_count: number;
+    preview: string;
+  }>;
+  unmatched_exam_questions: Array<{
+    question_id: string;
+    question_number: number;
+    path: string;
+    text_preview: string;
+  }>;
+  unmatched_key_sections: Array<{
+    number?: number;
+    label?: string;
+    path: string;
+    preview?: string;
+    reason?: string;
+  }>;
+  summary: {
+    key_sections_found: number;
+    matched_count: number;
+    unmatched_exam_count: number;
+    unmatched_key_count: number;
+  };
+}
+
+export interface AnswerKeyUploadResponse {
+  message: string;
+  exam_id: string;
+  questions_updated: number;
+  matched_count: number;
+  unmatched_exam_count: number;
+  unmatched_key_count: number;
+  summary: AnswerKeyPreviewResponse['summary'];
+}
 
 export interface OcrStatusResponse {
   cloud: {

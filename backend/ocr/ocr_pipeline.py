@@ -111,17 +111,134 @@ class OCRProcessor:
         except Exception:
             return []
 
+    _PAGE_BREAK = "<<PAGEBREAK>>"
+
     @staticmethod
     def _text_is_clean(text: str) -> bool:
         """
-        Return True if the extracted text looks like real readable content
-        (not garbled OCR noise or just whitespace).
+        Return True when embedded PDF text is typed, readable prose/math — not
+        scan noise, watermarks, or a thin OCR layer over handwriting.
         """
-        if not text or len(text.strip()) < 15:
+        if not text or len(text.strip()) < 40:
             return False
-        # Ratio of printable ASCII to total chars should be high
-        printable = sum(1 for c in text if c.isprintable() or c in '\n\t')
-        return (printable / len(text)) > 0.85
+        s = text.strip()
+        printable = sum(1 for c in s if c.isprintable() or c in "\n\t")
+        if (printable / len(s)) <= 0.85:
+            return False
+        word_chars = sum(
+            1
+            for c in s
+            if c.isalnum() or c.isspace() or c in ".,;:!?'\"()-+=/^*[]"
+        )
+        symbol_soup = sum(1 for c in s if c in "|~}{\\<>_")
+        if word_chars / len(s) < 0.45 or symbol_soup / len(s) > 0.12:
+            return False
+        words = len(re.findall(r"[A-Za-z]{3,}", s))
+        if words < 3 and len(s) < 120:
+            return False
+        return OCRProcessor._ocr_quality_score(s) >= 0.42
+
+    @staticmethod
+    def upload_needs_ocr(file_bytes: bytes, filename: str) -> bool:
+        """True for photos/scans that should go through handwriting OCR (Mathpix)."""
+        lower = (filename or "").lower()
+        if lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            return True
+        if lower.endswith(".pdf"):
+            return OCRProcessor._pdf_needs_ocr(file_bytes)
+        return False
+
+    @staticmethod
+    def _pdf_needs_ocr(pdf_bytes: bytes) -> bool:
+        """True when a PDF is image-based or lacks usable embedded text."""
+        scan_flags = OCRProcessor._pdf_page_scan_flags(pdf_bytes)
+        if scan_flags and any(scan_flags):
+            return True
+        pages = OCRProcessor._best_pdf_text_pages(pdf_bytes)
+        if not pages:
+            return True
+        non_empty = [p for p in pages if p.strip()]
+        if not non_empty:
+            return True
+        return not all(OCRProcessor._text_is_clean(p) for p in non_empty)
+
+    @staticmethod
+    def _best_pdf_text_pages(pdf_bytes: bytes) -> List[str]:
+        """Prefer pdftotext layout output; fall back to pypdf per-page text."""
+        layout = OCRProcessor.extract_pdf_layout_pages(pdf_bytes)
+        if layout:
+            return layout
+        return OCRProcessor.extract_pdf_text_pages(pdf_bytes)
+
+    @staticmethod
+    def extract_pdf_layout_pages(pdf_bytes: bytes) -> List[str]:
+        """
+        Extract layout-preserving text via poppler pdftotext (best for typed exams).
+        Returns one string per page; empty list when poppler is unavailable.
+        """
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["pdftotext", "-layout", "-", "-"],
+                input=pdf_bytes,
+                capture_output=True,
+                timeout=60,
+            )
+            if result.returncode != 0 or not result.stdout:
+                return []
+            text = result.stdout.decode("utf-8", errors="replace")
+            text = re.sub(r"\x0c", f"\n{OCRProcessor._PAGE_BREAK}\n", text)
+            text = re.sub(
+                r"(?m)^\s*(?:-+\s*\d+\s+of\s+\d+\s*-+|page\s+\d+\s+of\s+\d+)\s*$",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            )
+            parts = [p.strip() for p in text.split(OCRProcessor._PAGE_BREAK)]
+            return [p for p in parts if p]
+        except FileNotFoundError:
+            logger.debug("pdftotext not found (install poppler for typed PDF extraction)")
+        except Exception as ex:
+            logger.debug("pdftotext layout extraction failed: %s", ex)
+        return []
+
+    @staticmethod
+    def _pdf_page_scan_flags(pdf_bytes: bytes) -> List[bool]:
+        """
+        Per-page heuristic: large embedded images + little selectable text ⇒ scan.
+        """
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            flags: List[bool] = []
+            for page in reader.pages:
+                text_len = len((page.extract_text() or "").strip())
+                image_pixels = 0
+                try:
+                    resources = page.get("/Resources")
+                    if resources:
+                        resources = resources.get_object()
+                        xobjects = resources.get("/XObject")
+                        if xobjects:
+                            xobjects = xobjects.get_object()
+                            for ref in xobjects.values():
+                                obj = ref.get_object()
+                                if obj.get("/Subtype") == "/Image":
+                                    w = int(obj.get("/Width", 0) or 0)
+                                    h = int(obj.get("/Height", 0) or 0)
+                                    image_pixels += w * h
+                except Exception:
+                    pass
+                mb = page.mediabox
+                page_pixels = float(mb.width) * float(mb.height) if mb else 0.0
+                large_image = page_pixels > 0 and image_pixels > page_pixels * 0.25
+                sparse_text = text_len < 100
+                flags.append(large_image and sparse_text)
+            return flags
+        except Exception:
+            return []
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -144,27 +261,54 @@ class OCRProcessor:
         """
         lower = filename.lower()
 
-        # ── Fast path: typed PDF ─────────────────────────────────────────────
-        if lower.endswith('.pdf'):
-            pdf_pages = self.extract_pdf_text_pages(file_bytes)
-            # If every page produced clean text, skip OCR entirely
-            clean_pages = [p for p in pdf_pages if self._text_is_clean(p)]
-            if clean_pages and len(clean_pages) == max(len(pdf_pages), 1):
-                all_text = '\n\n'.join(clean_pages)
-                steps = []
-                for page_text in clean_pages:
+        # ── Fast path: typed PDF (skip Mathpix when embedded text is real prose) ─
+        if lower.endswith(".pdf"):
+            pdf_pages = self._best_pdf_text_pages(file_bytes)
+            scan_flags = self._pdf_page_scan_flags(file_bytes)
+            typed_pdf = bool(pdf_pages) and not any(
+                (i < len(scan_flags) and scan_flags[i]) or not self._text_is_clean(p)
+                for i, p in enumerate(pdf_pages)
+            )
+            if typed_pdf:
+                all_text = "\n\n".join(p for p in pdf_pages if p.strip())
+                steps: List[str] = []
+                for page_text in pdf_pages:
                     steps.extend(self._segment_steps(page_text))
                 steps = [s for s in (s.strip() for s in steps) if s]
+                logger.info(
+                    "Using direct PDF text extraction (%d page(s), no OCR)",
+                    len(pdf_pages),
+                )
                 return OCRResult(
                     combined_text=all_text,
                     steps=steps,
-                    page_count=len(clean_pages),
-                    processed_previews=[],   # no images to show
+                    page_count=len(pdf_pages),
+                    processed_previews=[],
+                )
+            if self.upload_needs_ocr(file_bytes, filename):
+                provider = (
+                    self.cloud.active_provider_name
+                    if self.cloud and self.cloud.active_provider_name
+                    else "local OCR"
+                )
+                logger.info(
+                    "PDF upload needs handwriting OCR — using %s",
+                    provider,
                 )
             # Partial or zero extraction → fall through to OCR below,
             # but seed the text with whatever was extracted.
-            pre_extracted = pdf_pages  # list of str, may be empty per page
+            pre_extracted = pdf_pages
         else:
+            if self.upload_needs_ocr(file_bytes, filename):
+                provider = (
+                    self.cloud.active_provider_name
+                    if self.cloud and self.cloud.active_provider_name
+                    else "local OCR"
+                )
+                logger.info(
+                    "Image upload needs handwriting OCR — using %s",
+                    provider,
+                )
             pre_extracted = []
 
         # ── OCR path (images + scanned PDFs) ─────────────────────────────────
@@ -471,16 +615,24 @@ class OCRProcessor:
 
     def _upscale_for_cloud(self, image: Image.Image) -> Image.Image:
         """
-        Cloud providers want clean, large images. Mathpix specifically prefers
-        ≥ ~1000-1500px on the long edge for handwriting; over ~3000px wastes bytes.
+        Prepare a page image for cloud OCR: RGB, within Mathpix size limits.
         """
         target = 2600
-        if image.width >= target or image.height >= target:
-            return image.convert("RGB")
-        long_side = max(image.width, image.height)
-        scale = target / float(long_side)
-        new_size = (int(image.width * scale), int(image.height * scale))
-        return image.convert("RGB").resize(new_size, Image.Resampling.LANCZOS)
+        img = image.convert("RGB")
+        long_side = max(img.width, img.height)
+        if long_side > target:
+            scale = target / float(long_side)
+            img = img.resize(
+                (int(img.width * scale), int(img.height * scale)),
+                Image.Resampling.LANCZOS,
+            )
+        elif long_side < 1200:
+            scale = target / float(long_side)
+            img = img.resize(
+                (int(img.width * scale), int(img.height * scale)),
+                Image.Resampling.LANCZOS,
+            )
+        return img
 
     # ── Kept for backward compatibility but no longer called ─────────────────
 

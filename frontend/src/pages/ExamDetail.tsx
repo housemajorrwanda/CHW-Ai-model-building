@@ -42,6 +42,9 @@ import {
 import { format } from 'date-fns';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { AttachmentImage } from '@/components/ui/AttachmentImage';
+import { RichContentViewer } from '@/components/exam-taker/RichContentViewer';
+import { AnswerKeyUpload } from '@/components/exam-builder/AnswerKeyUpload';
 
 /** Question tree returned by GET /exams/:id (top-level and nested sub-questions). */
 interface ExamDetailQuestion {
@@ -67,6 +70,7 @@ interface ExamDetailQuestion {
   }>;
   finalAnswer?: string;
   finalAnswerLatex?: string;
+  outlineTitle?: string | null;
   subQuestions?: ExamDetailQuestion[];
 }
 
@@ -209,28 +213,51 @@ export default function ExamDetail() {
     );
   }
 
-  const renderQuestion = (question: ExamDetailQuestion, parentNumber: string = '', level: number = 0) => {
-    const questionNumber = parentNumber ? `${parentNumber}.${question.number}` : question.number.toString();
+  const renderSubParts = (subs: ExamDetailQuestion[], depth = 0): JSX.Element => (
+    <div className={depth > 0 ? 'ml-4 mt-2 space-y-2' : 'space-y-3'}>
+      {subs.map((sub, idx) => {
+        const label = sub.outlineTitle?.trim() || String.fromCharCode(97 + idx);
+        return (
+          <div key={sub.id || `${depth}-${idx}`}>
+            <div className="flex gap-3 pl-2 border-l-2 border-primary/30">
+              <span className="font-semibold text-primary shrink-0 min-w-[2rem] pt-0.5">
+                {label}
+              </span>
+              <div className="flex-1 min-w-0">
+                <RichContentViewer content={sub.richContent || sub.text} className="text-sm" />
+                <span className="text-xs text-muted-foreground">
+                  [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
+                </span>
+              </div>
+            </div>
+            {sub.subQuestions && sub.subQuestions.length > 0
+              ? renderSubParts(sub.subQuestions, depth + 1)
+              : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 
+  const renderQuestion = (question: ExamDetailQuestion) => {
     return (
-      <Card key={question.id} className={level > 0 ? 'ml-8 border-l-2' : ''}>
+      <Card key={question.id}>
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
-              <Badge variant={level === 0 ? 'default' : 'secondary'}>
-                Q{questionNumber}
+              <Badge variant="default">
+                Q{question.number}
               </Badge>
               <div>
                 <CardTitle className="text-base">
-                  {question.text || '(No question text)'}
+                  {question.richContent ? (
+                    <RichContentViewer content={question.richContent} />
+                  ) : (
+                    question.text || '(No question text)'
+                  )}
                 </CardTitle>
-                {question.richContent && (
-                  <div className="mt-2 prose prose-sm max-w-none">
-                    {/* Render rich content if available */}
-                    <p className="text-sm text-muted-foreground">
-                      (Rich content available)
-                    </p>
-                  </div>
+                {question.richContent && question.text && (
+                  <p className="sr-only">{question.text}</p>
                 )}
               </div>
             </div>
@@ -244,14 +271,11 @@ export default function ExamDetail() {
               <p className="text-sm font-semibold">Diagrams / Images</p>
               <div className="flex flex-wrap gap-4">
                 {question.attachments.map((att) => {
-                  const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-                  const origin = apiBase.replace(/\/api\/?$/, '');
-                  const src = att.filePath?.startsWith('http') ? att.filePath : `${origin}${att.filePath}`;
                   if (att.attachmentType === 'image' || !att.attachmentType) {
                     return (
-                      <img
+                      <AttachmentImage
                         key={att.id}
-                        src={src}
+                        filePath={att.filePath}
                         alt={att.filename}
                         className="max-w-full max-h-80 rounded-lg border object-contain"
                       />
@@ -268,22 +292,11 @@ export default function ExamDetail() {
             </div>
           )}
 
-          {/* Sub-questions (a), (b), (c) */}
-          {question.subQuestions && question.subQuestions.length > 0 && level === 0 && (
-            <div className="space-y-3">
-              {question.subQuestions.map((sub, idx: number) => (
-                <div key={sub.id || idx} className="flex gap-3 pl-2 border-l-2 border-primary/30">
-                  <span className="font-semibold text-primary shrink-0 w-6 pt-0.5">
-                    ({String.fromCharCode(97 + idx)})
-                  </span>
-                  <div className="flex-1">
-                    <p className="text-sm">{sub.text || '(No text)'}</p>
-                    <span className="text-xs text-muted-foreground">
-                      [{sub.points} {sub.points === 1 ? 'point' : 'points'}]
-                    </span>
-                  </div>
-                </div>
-              ))}
+          {/* Sub-questions nested under this question */}
+          {question.subQuestions && question.subQuestions.length > 0 && (
+            <div className="border-t pt-4">
+              <p className="text-sm font-semibold mb-3">Parts:</p>
+              {renderSubParts(question.subQuestions)}
             </div>
           )}
 
@@ -351,26 +364,19 @@ export default function ExamDetail() {
             </div>
           )}
 
-          {/* Sub-questions */}
-          {question.subQuestions && question.subQuestions.length > 0 && (
-            <div className="border-t pt-4 space-y-3">
-              <p className="text-sm font-semibold">Sub-questions:</p>
-              {question.subQuestions.map((subQ) =>
-                renderQuestion(subQ, questionNumber, level + 1)
-              )}
-            </div>
-          )}
         </CardContent>
       </Card>
     );
   };
 
+  const sumQuestionPoints = (q: ExamDetailQuestion): number => {
+    const subs = q.subQuestions ?? [];
+    if (subs.length > 0) return subs.reduce((s, sub) => s + sumQuestionPoints(sub), 0);
+    return q.points ?? 0;
+  };
+
   const totalPoints =
-    exam.questions?.reduce((sum, q) => {
-      const subPoints =
-        q.subQuestions?.reduce((subSum, sub) => subSum + sub.points, 0) || 0;
-      return sum + q.points + subPoints;
-    }, 0) || 0;
+    exam.questions?.reduce((sum, q) => sum + sumQuestionPoints(q), 0) || 0;
 
   return (
     <DashboardLayout>
@@ -469,6 +475,10 @@ export default function ExamDetail() {
             )}
           </div>
         </div>
+
+        {user?.role === 'professor' && examId && (
+          <AnswerKeyUpload examId={examId} examTitle={exam.title} />
+        )}
 
         {/* Exam Preview */}
         <Card>

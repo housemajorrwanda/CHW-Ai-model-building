@@ -3,6 +3,7 @@
  * Non-math segments are rendered as plain text.
  */
 import { useEffect, useRef } from 'react';
+import 'katex/dist/katex.min.css';
 
 interface MathTextProps {
   text: string;

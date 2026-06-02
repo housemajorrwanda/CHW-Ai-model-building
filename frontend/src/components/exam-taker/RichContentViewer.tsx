@@ -13,6 +13,7 @@ import { Mathematics, migrateMathStrings } from '@tiptap/extension-mathematics';
 import 'katex/dist/katex.min.css';
 import { useEffect } from 'react';
 import { GraphExtension } from '@/components/exam-builder/extensions/GraphExtension';
+import { plainTextLooksLikeMath, plainTextWithMathToDoc } from '@/lib/plainTextWithMathToDoc';
 
 interface RichContentViewerProps {
   content: string | object | null | undefined;
@@ -81,6 +82,8 @@ function resolveContent(content: string | object | null | undefined): object | s
     if (content.startsWith(PLACEHOLDER_PREFIX)) return null;
     // Already HTML
     if (content.trimStart().startsWith('<')) return content;
+    // OCR / Mathpix plain text with LaTeX delimiters → TipTap math nodes
+    if (plainTextLooksLikeMath(content)) return plainTextWithMathToDoc(content);
     // Plain text — wrap so the editor renders it properly
     return `<p>${content}</p>`;
   }
