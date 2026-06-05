@@ -6,7 +6,19 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./easygrade.db")
+
+def _resolve_database_url() -> str:
+    """Normalize DATABASE_URL for local dev, Render Postgres, and empty env placeholders."""
+    raw = (os.getenv("DATABASE_URL") or "").strip()
+    if not raw:
+        return "sqlite:///./easygrade.db"
+    # Render/Heroku provide postgres://; SQLAlchemy 2.x expects postgresql://
+    if raw.startswith("postgres://"):
+        return "postgresql://" + raw[len("postgres://") :]
+    return raw
+
+
+DATABASE_URL = _resolve_database_url()
 
 # Create engine
 engine = create_engine(
