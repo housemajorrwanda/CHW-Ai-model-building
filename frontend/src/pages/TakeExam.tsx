@@ -322,7 +322,10 @@ export default function TakeExam() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['submissions'] });
       setIsSubmitted(true);
-      toast({ title: 'Submission successful!', description: 'Your exam has been submitted for grading.' });
+      toast({
+        title: 'Submission successful!',
+        description: 'Your answers are being graded automatically.',
+      });
     },
     onError: (error: any) => {
       toast({ title: 'Submission failed', description: error.message || 'Failed to submit exam', variant: 'destructive' });

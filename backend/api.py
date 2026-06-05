@@ -10,7 +10,7 @@ _backend_dir = Path(__file__).resolve().parent
 load_dotenv(_backend_dir.parent / ".env")
 load_dotenv(_backend_dir / ".env")  # optional backend-local override
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -28,7 +28,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
-from database import get_db, init_db, engine
+from database import get_db, init_db, engine, SessionLocal
 import models
 import schemas
 import notifications_service
@@ -4777,6 +4777,30 @@ def _grade_ocr_image_for_question_tree(
     )
 
 
+def _reset_submission_grading(db: Session, submission_id: str) -> None:
+    """Remove prior grading rows so re-runs (auto or manual) do not duplicate results."""
+    submission = (
+        db.query(models.Submission)
+        .options(selectinload(models.Submission.grading_results))
+        .filter(models.Submission.id == submission_id)
+        .first()
+    )
+    if submission and submission.grading_results:
+        submission.grading_results.clear()
+        db.flush()
+
+
+async def _run_auto_grade_background(submission_id: str) -> None:
+    """Background worker: own DB session so submit can return while OCR/grading runs."""
+    db = SessionLocal()
+    try:
+        await grade_submission_automatically(submission_id, db)
+    except Exception:
+        logger.exception("Background auto-grading failed for submission %s", submission_id)
+    finally:
+        db.close()
+
+
 async def grade_submission_automatically(submission_id: str, db: Session):
     """Automatically grade a submission after it's submitted"""
     import json
@@ -4792,6 +4816,7 @@ async def grade_submission_automatically(submission_id: str, db: Session):
     if not submission:
         return
     
+    _reset_submission_grading(db, submission_id)
     submission.status = models.SubmissionStatus.GRADING
     db.commit()
     
@@ -4955,6 +4980,7 @@ async def submit_exam(
     images: List[UploadFile] = File(default=[]),
     answers: Optional[str] = Form(None),
     answer_pdf: Optional[UploadFile] = File(default=None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -5113,19 +5139,17 @@ async def submit_exam(
             link=f"/submissions/{new_submission.id}",
         )
 
+    new_submission.status = models.SubmissionStatus.GRADING
     db.commit()
     db.refresh(new_submission)
-    
-    # Automatically trigger AI grading (same path as manual "Auto-grade")
-    try:
-        await grade_submission_automatically(new_submission.id, db)
-    except Exception:
-        logger.exception("Auto-grading failed after submit for submission %s", new_submission.id)
-    
+
+    # Grade in the background so long OCR runs do not block the student submit response.
+    background_tasks.add_task(_run_auto_grade_background, new_submission.id)
+
     return {
         "id": new_submission.id,
-        "status": "success",
-        "message": "Submission created successfully. AI grading in progress."
+        "status": "grading",
+        "message": "Submission received. AI grading started automatically.",
     }
 
 
@@ -5532,221 +5556,41 @@ async def grade_submission(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Grade a submission using typed answers or OCR and the math grader"""
-    import json
-    
+    """Re-run automatic grading (same pipeline as submit). Professors only."""
     if current_user.role not in [models.UserRole.PROFESSOR, models.UserRole.ADMIN]:
         raise HTTPException(status_code=403, detail="Only professors can grade submissions")
-    
-    # Get submission
-    submission = db.query(models.Submission).filter(
-        models.Submission.id == submission_id
-    ).first()
+
+    submission = (
+        db.query(models.Submission)
+        .options(selectinload(models.Submission.images))
+        .filter(models.Submission.id == submission_id)
+        .first()
+    )
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
-    
-    # Update status
-    submission.status = models.SubmissionStatus.GRADING
-    db.commit()
-    
-    # Get exam and questions
-    exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
-    questions = exam.questions
-    top_level_ordered = _ordered_top_level_questions(list(questions))
-    
-    total_score = 0.0
-    
-    # Check if there are typed answers
-    has_typed_answers = submission.typed_answers is not None and submission.typed_answers.strip()
+
+    has_typed = bool((submission.typed_answers or "").strip())
     has_images = len(submission.images) > 0
-    
-    if not has_typed_answers and not has_images:
-        raise HTTPException(status_code=400, detail="No answers found for submission (neither typed nor images)")
-    
-    # Track questions already graded (e.g. from typed answers) to avoid double-counting when we also have images
-    graded_question_ids: set = set()
-    
-    # Process typed answers if available
-    if has_typed_answers:
-        try:
-            typed_answers_data = json.loads(submission.typed_answers)
-            
-            for answer_data in typed_answers_data:
-                question_id = answer_data.get('questionId')
-                question_number = answer_data.get('questionNumber')
-                typed_answer = answer_data.get('typedAnswer', '')
-                
-                # Find the corresponding question
-                question = _resolve_exam_question_for_answer(
-                    questions, question_id, question_number
-                )
-                
-                if not question:
-                    continue
-                
-                # Extract math content from HTML
-                text_content, latex_content = extract_math_from_html(typed_answer)
-                
-                if not text_content and not latex_content:
-                    continue
-                
-                # Use LaTeX if available, otherwise use text
-                answer_to_grade = latex_content if latex_content else text_content
-                
-                # Parse answer into steps
-                student_steps = parse_answer_into_steps(answer_to_grade)
-                
-                if not student_steps:
-                    continue
-                
-                gold_steps = _gold_steps_for_question(question)
-                if not gold_steps:
-                    continue
-                
-                grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
-                grading_result = grader.grade(student_steps)
-                steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
-                
-                # Store grading result
-                db_grading_result = models.GradingResult(
-                    submission_id=submission.id,
-                    question_id=question.id,
-                    extracted_text=text_content,
-                    extracted_latex=latex_content,
-                    score=grading_result['total_score'],
-                    max_score=grading_result['max_score'],
-                    feedback=f"Graded: {grading_result['percentage']:.1f}%",
-                    is_correct=grading_result['percentage'] >= 70
-                )
-                db.add(db_grading_result)
-                db.flush()
-                
-                # Store step results
-                for idx, (student_step, evaluation) in enumerate(
-                    zip(steps_for_results, grading_result['evaluations']), start=1
-                ):
-                    matched_gold = None
-                    if evaluation.matched_gold_step is not None:
-                        matched_gold_step_obj = gold_steps[evaluation.matched_gold_step]
-                        matched_gold = matched_gold_step_obj.content
-                    
-                    step_result = models.StepResult(
-                        grading_result_id=db_grading_result.id,
-                        step_number=idx,
-                        student_text=student_step,
-                        is_correct=evaluation.status.value == "Correct",
-                        score=evaluation.points_earned,
-                        max_score=_step_result_max_score(evaluation, gold_steps, idx),
-                        feedback=evaluation.feedback,
-                        expected=matched_gold,
-                        received=student_step
-                    )
-                    db.add(step_result)
-                
-                total_score += grading_result['total_score']
-                graded_question_ids.add(question.id)
-                
-        except Exception as e:
-            print(f"Error grading typed answers: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    # Process images with OCR if available
-    if has_images:
-        for image in submission.images:
-            image_path = Path(image.image_path)
-            if not image_path.exists():
-                continue
-            
-            # Run OCR
-            with open(image_path, "rb") as f:
-                image_bytes = f.read()
-            
-            ocr_result = ocr_processor.extract_steps_from_file(
-                image_bytes,
-                image_path.name
-            )
-            
-            student_steps = ocr_result.steps
-            if not student_steps:
-                continue
+    if not has_typed and not has_images:
+        raise HTTPException(
+            status_code=400,
+            detail="No answers found for submission (neither typed nor images)",
+        )
 
-            stem = image_path.stem
-            question = None
-            if stem.startswith("q_"):
-                parts = stem.split("_", 2)
-                if len(parts) >= 2:
-                    candidate_qid = parts[1]
-                    question = next(
-                        (q for q in questions if q.id == candidate_qid), None
-                    )
-            if question is None:
-                pg = image.page_number
-                if 1 <= pg <= len(top_level_ordered):
-                    question = top_level_ordered[pg - 1]
-                else:
-                    question = top_level_ordered[0] if top_level_ordered else None
+    await grade_submission_automatically(submission_id, db)
+    db.refresh(submission)
+    exam = db.query(models.Exam).filter(models.Exam.id == submission.exam_id).first()
 
-            if not question or question.id in graded_question_ids:
-                continue
+    st = submission.status
+    if isinstance(st, models.SubmissionStatus):
+        st = st.value
 
-            gold_steps = _gold_steps_for_question(question)
-            if not gold_steps:
-                continue
-
-            grader = HybridGrader(gold_steps, use_ml=True, use_symbolic=True)
-            grading_result = grader.grade(student_steps)
-            steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
-
-            # Store grading result
-            db_grading_result = models.GradingResult(
-                submission_id=submission.id,
-                question_id=question.id,
-                extracted_text="\n".join(student_steps),
-                extracted_latex=None,
-                score=grading_result['total_score'],
-                max_score=grading_result['max_score'],
-                feedback=f"Scored {grading_result['percentage']:.1f}%",
-                is_correct=grading_result['percentage'] >= 70
-            )
-            db.add(db_grading_result)
-            db.flush()
-
-            # Store step results
-            for idx, (student_step, evaluation) in enumerate(
-                zip(steps_for_results, grading_result['evaluations']), start=1
-            ):
-                matched_gold = None
-                if evaluation.matched_gold_step is not None:
-                    matched_gold = gold_steps[evaluation.matched_gold_step].content
-
-                step_result = models.StepResult(
-                    grading_result_id=db_grading_result.id,
-                    step_number=idx,
-                    student_text=student_step,
-                    is_correct=evaluation.status.value == "Correct",
-                    score=evaluation.points_earned,
-                    max_score=_step_result_max_score(evaluation, gold_steps, idx),
-                    feedback=evaluation.feedback,
-                    expected=matched_gold,
-                    received=student_step
-                )
-                db.add(step_result)
-
-            total_score += grading_result['total_score']
-            graded_question_ids.add(question.id)
-    
-    # Update submission
-    submission.total_score = total_score
-    submission.status = models.SubmissionStatus.GRADED
-    submission.graded_at = datetime.utcnow()
-    db.commit()
-    
     return {
         "status": "success",
-        "message": "Submission graded successfully",
-        "totalScore": total_score,
-        "maxScore": exam.total_points
+        "message": "Submission graded automatically",
+        "submissionStatus": st,
+        "totalScore": submission.total_score,
+        "maxScore": submission.max_score if submission.max_score is not None else (exam.total_points if exam else 0),
     }
 
 

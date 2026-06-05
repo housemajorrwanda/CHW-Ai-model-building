@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { submissionsAPI, examsAPI } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,19 +7,9 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { ClipboardList, Eye, Sparkles, Clock, CheckCircle, Loader2, Filter, ThumbsDown } from 'lucide-react';
+import { ClipboardList, Eye, Clock, CheckCircle, Loader2, Filter, ThumbsDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 
 interface Submission {
   id: string;
@@ -40,11 +30,7 @@ export default function ProfessorSubmissions() {
   const [selectedExam, setSelectedExam] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
-  const [gradingSubmissionId, setGradingSubmissionId] = useState<string | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean; submission: Submission | null }>({
-    isOpen: false,
-    submission: null
-  });
+  const autoGradeAttempted = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const examParam = searchParams.get('exam');
@@ -70,24 +56,6 @@ export default function ProfessorSubmissions() {
     }
   };
 
-  const handleGrade = async () => {
-    if (!confirmDialog.submission) return;
-
-    try {
-      setGradingSubmissionId(confirmDialog.submission.id);
-      await submissionsAPI.grade(confirmDialog.submission.id);
-      toast.success('Submission graded successfully.', {
-        description: 'The student will be notified of their results.'
-      });
-      await loadData();
-    } catch (error: any) {
-      toast.error('Failed to grade submission: ' + error.message);
-    } finally {
-      setGradingSubmissionId(null);
-      setConfirmDialog({ isOpen: false, submission: null });
-    }
-  };
-
   const handleApprove = async (submissionId: string) => {
     try {
       await submissionsAPI.approve(submissionId);
@@ -109,6 +77,29 @@ export default function ProfessorSubmissions() {
       toast.error('Failed to reject: ' + error.message);
     }
   };
+
+  // Poll while any submission is still being auto-graded.
+  const hasGradingInProgress = submissions.some((s) => s.status === 'grading');
+  useEffect(() => {
+    if (!hasGradingInProgress) return;
+    const timer = setInterval(() => {
+      loadData();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [hasGradingInProgress]);
+
+  // Safety net: kick off grading for legacy "pending" rows (pre-auto-grade or failed runs).
+  useEffect(() => {
+    if (isLoading) return;
+    const pending = submissions.filter(
+      (s) => s.status === 'pending' && !autoGradeAttempted.current.has(s.id)
+    );
+    if (!pending.length) return;
+    pending.forEach((s) => autoGradeAttempted.current.add(s.id));
+    void Promise.all(
+      pending.map((s) => submissionsAPI.grade(s.id).catch(() => undefined))
+    ).then(() => loadData());
+  }, [submissions, isLoading]);
 
   const filteredSubmissions = submissions.filter(sub => {
     if (selectedExam !== 'all' && sub.examId !== selectedExam) return false;
@@ -278,8 +269,6 @@ export default function ProfessorSubmissions() {
                 <TableBody>
                   {filteredSubmissions.map((submission) => {
                     const exam = exams.find(e => e.id === submission.examId);
-                    const isGrading = gradingSubmissionId === submission.id;
-                    
                     return (
                       <TableRow key={submission.id}>
                         <TableCell>
@@ -336,22 +325,6 @@ export default function ProfessorSubmissions() {
                               View
                             </Button>
 
-                            {submission.status === 'pending' && (
-                              <Button
-                                size="sm"
-                                className="h-8"
-                                onClick={() => setConfirmDialog({ isOpen: true, submission })}
-                                disabled={isGrading}
-                              >
-                                {isGrading ? (
-                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                                ) : (
-                                  <Sparkles className="h-3.5 w-3.5 mr-1" />
-                                )}
-                                {isGrading ? 'Grading…' : 'Auto-grade'}
-                              </Button>
-                            )}
-
                             {(submission.status === 'graded' || submission.status === 'awaiting_approval') && (
                               <Button
                                 size="sm"
@@ -385,35 +358,6 @@ export default function ProfessorSubmissions() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Confirmation Dialog */}
-      <AlertDialog open={confirmDialog.isOpen} onOpenChange={(open) => setConfirmDialog({ ...confirmDialog, isOpen: open })}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" />
-              Automatic grading
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              The system will grade this submission using OCR to read the handwritten work
-              and compare it against the gold solution steps.
-              <br /><br />
-              <strong>Student:</strong> {confirmDialog.submission?.studentName}
-              <br />
-              <strong>Submitted:</strong> {confirmDialog.submission && format(new Date(confirmDialog.submission.submittedAt), 'MMM d, yyyy h:mm a')}
-              <br /><br />
-              This process may take a few moments. The student will be notified once grading is complete.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleGrade}>
-              <Sparkles className="h-4 w-4 mr-2" />
-              Start grading
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }
