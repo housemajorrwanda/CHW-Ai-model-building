@@ -3816,7 +3816,7 @@ def _plain_chunk_to_tiptap_html(chunk: str) -> str:
         inner = escape(t).replace("\n", "<br>")
         return f"<p>{inner}</p>"
     return "".join(
-        f"<p>{escape(p).replace('\n', '<br>')}</p>" for p in paras
+        "<p>" + escape(p).replace("\n", "<br>") + "</p>" for p in paras
     )
 
 
