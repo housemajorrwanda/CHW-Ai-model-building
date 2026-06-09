@@ -21,10 +21,15 @@ def _resolve_database_url() -> str:
 DATABASE_URL = _resolve_database_url()
 
 # Create engine
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-)
+_engine_kwargs: dict = {}
+if "sqlite" in DATABASE_URL:
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # Render Postgres: recycle connections and verify before use
+    _engine_kwargs["pool_pre_ping"] = True
+    _engine_kwargs["pool_recycle"] = 300
+
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -42,10 +47,8 @@ def get_db():
         db.close()
 
 
-def migrate_sqlite_user_demographics():
-    """Add user profile columns when upgrading an existing SQLite database."""
-    if "sqlite" not in DATABASE_URL:
-        return
+def migrate_user_demographics():
+    """Add user profile columns when upgrading an existing database."""
     from sqlalchemy import inspect, text
 
     insp = inspect(engine)
@@ -138,7 +141,7 @@ def init_db():
     """Initialize database tables"""
     import models  # Import models to register them
     Base.metadata.create_all(bind=engine)
-    migrate_sqlite_user_demographics()
+    migrate_user_demographics()
     migrate_questions_outline_title()
     migrate_user_reminder_preferences()
 
