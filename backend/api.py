@@ -140,6 +140,13 @@ def ocr_status():
             lh = local_handwriting_engine_status()
         except Exception:
             lh = {}
+    pp_status: dict = {}
+    try:
+        from ocr.pp_structure_processor import pp_structure_engine_status
+
+        pp_status = pp_structure_engine_status()
+    except Exception:
+        pp_status = {}
     prose_model = lh.get("proseModel") if trocr_enabled else None
     return {
         "cloud": cloud_status,
@@ -155,6 +162,7 @@ def ocr_status():
             "mathEnsembleMode": lh.get("mathEnsembleMode") if trocr_enabled else None,
         },
         "localEasyOcr": bool(ocr_processor.use_easyocr),
+        "ppStructure": pp_status,
         "tesseract": True,
         # Friendly description for the UI; safe to show to students.
         "summary": _ocr_status_summary(
@@ -163,6 +171,7 @@ def ocr_status():
             trocr_runtime,
             ocr_processor.use_easyocr,
             lh if trocr_enabled else {},
+            pp_status,
         ),
     }
 
@@ -173,6 +182,7 @@ def _ocr_status_summary(
     trocr_runtime: bool,
     easy_loaded: bool,
     local_hw: Optional[dict] = None,
+    pp_structure: Optional[dict] = None,
 ) -> str:
     active = cloud_status.get("active")
     if active == "mathpix":
@@ -181,6 +191,13 @@ def _ocr_status_summary(
         return "Handwriting is read by Google Cloud Vision (cloud OCR)."
     if active == "azure":
         return "Handwriting is read by Azure Read (cloud OCR)."
+    pp = pp_structure or {}
+    if pp.get("ready"):
+        return (
+            "Handwriting and formulas are read by PP-StructureV3 (PaddleOCR) "
+            f"with {pp.get('lang', 'en')} text recognition on "
+            f"{pp.get('device', 'cpu')}."
+        )
     if trocr_enabled:
         lh = local_hw or {}
         prose = lh.get("proseModel") or "microsoft/trocr-small-handwritten"

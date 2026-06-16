@@ -35,6 +35,22 @@ except Exception:  # pragma: no cover - optional ML deps
     def trocr_runtime_available() -> bool:  # type: ignore[misc]
         return False
 
+try:
+    from .pp_structure_processor import (
+        pp_structure_opt_in,
+        pp_structure_runtime_available,
+        read_page as pp_structure_read_page,
+    )
+except Exception:  # pragma: no cover - optional PaddleOCR deps
+    def pp_structure_opt_in() -> bool:  # type: ignore[misc]
+        return False
+
+    def pp_structure_runtime_available() -> bool:  # type: ignore[misc]
+        return False
+
+    def pp_structure_read_page(image, *, fast: bool = False) -> str:  # type: ignore[misc]
+        return ""
+
 
 @dataclass
 class OCRResult:
@@ -85,6 +101,19 @@ class OCRProcessor:
         self.trocr_runtime_available = trocr_runtime_available()
         if self.trocr is not None:
             logger.info("Local TrOCR handwriting engine enabled (model loads on first use).")
+
+        self.pp_structure_enabled = pp_structure_opt_in()
+        self.pp_structure_runtime_available = pp_structure_runtime_available()
+        if self.pp_structure_enabled:
+            if self.pp_structure_runtime_available:
+                logger.info(
+                    "PP-StructureV3 document OCR enabled (PaddleOCR; loads on first use)."
+                )
+            else:
+                logger.warning(
+                    "USE_PP_STRUCTURE is set but paddleocr did not import; "
+                    "install requirements-paddleocr.txt to enable PP-StructureV3."
+                )
 
     # ── Direct PDF text extraction (no OCR needed for typed PDFs) ────────────
 
@@ -541,6 +570,22 @@ class OCRProcessor:
                 if cleaned.strip():
                     return cleaned
 
+        # ── PP-StructureV3 layout + formula OCR (USE_PP_STRUCTURE=1) ─────────
+        pp_cleaned = ""
+        pp_score = 0.0
+        if self.pp_structure_runtime_available:
+            try:
+                pp_text = pp_structure_read_page(image, fast=fast)
+            except Exception as ex:  # pragma: no cover - model failure
+                logger.warning("PP-StructureV3 failed, falling back: %s", ex)
+                pp_text = ""
+            if pp_text.strip():
+                pp_cleaned = self._post_filter_scan_lines(pp_text)
+                if pp_cleaned.strip():
+                    pp_score = self._ocr_quality_score(pp_cleaned)
+                    if fast and pp_score >= 0.40:
+                        return pp_cleaned
+
         # ── Local TrOCR handwriting model (free, USE_TROCR=1) ─────────────────
         # We run it before the EasyOCR / Tesseract ensemble because on real
         # student handwriting it usually wins. If its output is empty or clearly
@@ -599,17 +644,32 @@ class OCRProcessor:
             if ensemble_text.strip():
                 ens_score = self._ocr_quality_score(ensemble_text)
 
+        # Prefer PP-Structure when it clearly wins (layout + formula blocks).
+        if pp_cleaned.strip() and pp_score >= 0.48:
+            return pp_cleaned
+
         # Prefer TrOCR when it is clearly good; when it is only mediocre, let the
         # classical ensemble win if it scores noticeably higher (reduces stuck
         # wrong-line crops from the neural line splitter).
         if trocr_cleaned.strip():
             if trocr_score >= 0.48:
+                if pp_score > trocr_score + 0.05 and pp_cleaned.strip():
+                    return pp_cleaned
                 return trocr_cleaned
             if trocr_score >= 0.34 and trocr_score + 0.06 >= ens_score:
+                if pp_score > trocr_score + 0.08 and pp_cleaned.strip():
+                    return pp_cleaned
                 return trocr_cleaned
             if ens_score > trocr_score + 0.07 and ensemble_text.strip():
+                if pp_score > ens_score + 0.05 and pp_cleaned.strip():
+                    return pp_cleaned
                 return ensemble_text
+            if pp_cleaned.strip() and pp_score + 0.04 >= trocr_score:
+                return pp_cleaned
             return trocr_cleaned
+
+        if pp_cleaned.strip() and pp_score >= 0.34:
+            return pp_cleaned
 
         return ensemble_text
 

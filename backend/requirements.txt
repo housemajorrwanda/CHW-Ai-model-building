@@ -20,6 +20,8 @@ pyjwt>=2.8.0
 pytesseract>=0.3.10
 # Optional: much better on handwritten scans (large). Enable with USE_EASYOCR=1 — not used on slim deploys.
 # easyocr>=1.7.0
+# Optional: layout + formula OCR via PaddleOCR PP-StructureV3 (USE_PP_STRUCTURE=1).
+# See backend/requirements-paddleocr.txt — not used on slim deploys.
 
 # Local math/handwriting models (free, no API key):
 #   - microsoft/trocr-base-handwritten (English handwriting)         loaded from `transformers`

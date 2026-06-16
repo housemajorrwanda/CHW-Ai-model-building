@@ -1,0 +1,7 @@
+# Optional: PP-StructureV3 layout + formula OCR (USE_PP_STRUCTURE=1).
+# Install PaddlePaddle first, then paddleocr with the doc-parser extra.
+# Python 3.9–3.13 supported; on Apple Silicon use CPU wheels:
+#   python3.11 -m pip install paddlepaddle==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+#   python3.11 -m pip install -r requirements-paddleocr.txt
+paddlepaddle==3.3.0
+paddleocr[doc-parser]>=3.0.3
