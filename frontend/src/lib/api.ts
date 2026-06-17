@@ -472,6 +472,7 @@ export interface GradingStepResult {
   expected?: string;
   received?: string;
   expectedDisplay?: string;
+  expectedMathLatex?: string;
   receivedDisplay?: string;
   receivedMathLatex?: string;
 }
@@ -488,6 +489,9 @@ export interface GradingResult {
 export interface SubmissionAnswer {
   questionId: string;
   questionNumber: number;
+  parentQuestionId?: string | null;
+  outlineTitle?: string | null;
+  displayLabel?: string | null;
   gradingResult?: GradingResult;
   gradingResultId?: string;
   extractedText?: string;
@@ -511,8 +515,12 @@ export interface SubmissionDetail {
 
 export interface ExamQuestion {
   id: string;
+  number?: number;
   text?: string;
+  richContent?: unknown;
+  points?: number;
   outlineTitle?: string | null;
+  subQuestions?: ExamQuestion[];
   goldSolution?: { steps?: unknown[] };
   goldSolutionSteps?: unknown;
   finalAnswer?: string;

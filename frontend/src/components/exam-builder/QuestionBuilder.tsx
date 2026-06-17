@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Plus, Eye, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react';
@@ -66,17 +66,26 @@ interface QuestionBuilderProps {
   onQuestionsChange: (questions: Question[]) => void;
   /** When false, hide the slide-out preview (e.g. when the parent page has a dedicated Preview tab). */
   enableInlinePreview?: boolean;
+  /** Parent ids to expand in the outline when loading an uploaded exam. */
+  initialExpandedIds?: string[];
 }
 
 export function QuestionBuilder({
   questions,
   onQuestionsChange,
   enableInlinePreview = true,
+  initialExpandedIds,
 }: QuestionBuilderProps) {
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (initialExpandedIds && initialExpandedIds.length > 0) {
+      setExpandedQuestions(new Set(initialExpandedIds));
+    }
+  }, [initialExpandedIds?.join('|')]);
 
   const addQuestion = () => {
     const newQuestion: Question = {
@@ -276,6 +285,11 @@ export function QuestionBuilder({
               question={activeQuestion}
               onUpdate={updateQuestion}
               onAddSubQuestion={() => addSubQuestion(activeQuestion.id)}
+              onSelectSubQuestion={(subId) => {
+                setActiveQuestionId(subId);
+                const parentId = activeQuestion.parentQuestionId ?? activeQuestion.id;
+                setExpandedQuestions((prev) => new Set(prev).add(parentId));
+              }}
             />
           ) : (
             <div className="flex h-full min-h-[280px] flex-col items-center justify-center px-4 text-center">

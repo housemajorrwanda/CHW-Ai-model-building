@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AnswerEditor } from '@/components/exam-taker/AnswerEditor';
 import { QuestionDisplay, type SubQuestion } from '@/components/exam-taker/QuestionDisplay';
 import { RichContentViewer } from '@/components/exam-taker/RichContentViewer';
-import { MathText } from '@/components/ui/MathText';
+import { ReviewAnswerBody } from '@/components/exam-taker/ReviewAnswerBody';
 import {
   Upload,
   X,
@@ -475,6 +475,58 @@ export default function TakeExam() {
       };
     });
   }, [exam, answers, markedForReview, fullAnswerPdf, pdfPreview, pdfPreviewLoading]);
+
+  const handleReviewEdit = useCallback(
+    (questionIndex: number) => {
+      const q = exam?.questions?.[questionIndex];
+      if (!q) return;
+      const qNum = q.number || questionIndex + 1;
+      const ans = answers.find((a) => a.questionId === q.id || a.questionNumber === qNum);
+      const previewRow = pdfPreview?.rows.find((r) => r.questionNumber === qNum);
+      const hasTypedText = !!(
+        ans &&
+        ((ans.typedAnswer || '').trim() ||
+          ans.subAnswers.some((sa) => (sa.typedAnswer || '').trim()))
+      );
+
+      setCurrentQuestionIndex(questionIndex);
+      setReviewSubmitOpen(false);
+      setCurrentTab('typed');
+
+      if (!hasTypedText && previewRow?.answerExcerpt?.trim() && q.id) {
+        const excerpt = previewRow.answerExcerpt.trim();
+        const subs = q.subQuestions ?? [];
+        setAnswers((prev) =>
+          prev.map((a) => {
+            if (a.questionId !== q.id) return a;
+            if (subs.length > 0) {
+              const subAnswers = a.subAnswers.map((sa, si) =>
+                si === 0 && !(sa.typedAnswer || '').trim()
+                  ? { ...sa, typedAnswer: excerpt }
+                  : sa
+              );
+              return { ...a, subAnswers };
+            }
+            return { ...a, typedAnswer: excerpt };
+          })
+        );
+        toast({
+          title: 'PDF text copied for editing',
+          description:
+            subs.length > 0
+              ? 'Approximate text from your PDF was placed in the first part. Split or correct each part as needed.'
+              : 'Approximate text from your PDF was copied into the editor. Correct any OCR mistakes before submitting.',
+        });
+      } else if (!hasTypedText && previewRow && pdfPreviewRowIndicatesCapture(previewRow)) {
+        toast({
+          title: 'Type your answer',
+          description:
+            'Your work will come from the uploaded PDF on submit. Type here if you want to add or replace text for this question.',
+        });
+      }
+    },
+    [exam, answers, pdfPreview, toast]
+  );
 
   const clearCurrentResponse = useCallback(() => {
     if (!exam?.questions?.length) return;
@@ -1370,10 +1422,7 @@ export default function TakeExam() {
                     variant="ghost"
                     size="sm"
                     className="shrink-0 text-slate-700 hover:bg-slate-100 dark:text-sky-300 dark:hover:bg-sky-950/50"
-                    onClick={() => {
-                      setCurrentQuestionIndex(item.index);
-                      setReviewSubmitOpen(false);
-                    }}
+                    onClick={() => handleReviewEdit(item.index)}
                   >
                     Edit
                   </Button>
@@ -1388,9 +1437,7 @@ export default function TakeExam() {
                         </p>
                         {part.body ? (
                           <div className="max-h-40 overflow-y-auto rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 dark:bg-muted/20">
-                            <div className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground">
-                              <MathText text={part.body} />
-                            </div>
+                            <ReviewAnswerBody body={part.body} />
                           </div>
                         ) : (
                           <p className="rounded-lg border border-dashed border-border/70 bg-muted/15 px-3 py-2 text-xs italic text-muted-foreground">

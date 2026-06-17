@@ -2,10 +2,23 @@ import re
 from typing import List, Dict, Optional, Tuple
 import logging
 
+from ocr.text_rich_content import looks_like_math_ocr, looks_like_equation_line, normalize_exam_ocr_text
+
 logger = logging.getLogger(__name__)
 
 _ROMAN_NUMERAL = r"i{1,3}|iv|vi{0,3}|ix|x"
 _MARK_RE = re.compile(r"[\[\(](\d+)\s*(?:points?|pts?|marks?)[\]\)]", re.IGNORECASE)
+_GOLD_MARKER_RE = re.compile(
+    r"(?i)(?:"
+    r"gold(?:en)?\s+(?:solution|answer|soltion|solu\w*)"
+    r"|model\s+answer"
+    r"|expected\s+answer"
+    r"|correct\s+answer"
+    r"|answer\s+key"
+    r"|(?:worked\s+)?solution\s*:"
+    r"|(?:final\s+)?answer\s*:"
+    r")"
+)
 
 
 class ExamParser:
@@ -75,6 +88,21 @@ class ExamParser:
         )
         self._numeric_sub_re = re.compile(r"^\s*(\d{1,2})\.\s+(.*)$")
 
+    def _document_has_gold_markers(self, text: str) -> bool:
+        return bool(_GOLD_MARKER_RE.search(text or ""))
+
+    def _is_gold_marker_line(self, line: str) -> bool:
+        return bool(_GOLD_MARKER_RE.search(line or ""))
+
+    def _split_gold_marker_line(self, line: str) -> Tuple[str, str]:
+        m = _GOLD_MARKER_RE.search(line or "")
+        if not m:
+            return "", (line or "").strip()
+        after = (line[m.end():] or "").strip()
+        if after.startswith(":"):
+            after = after[1:].strip()
+        return m.group(0), after
+
     # ------------------------------------------------------------------
     # Text normalisation helpers
     # ------------------------------------------------------------------
@@ -102,6 +130,17 @@ class ExamParser:
             (r"Q1estion", "Question"),
             (r"Gold\s*S0lution", "Gold Solution"),
             (r"gold\s*s0lution", "gold solution"),
+            (r"Gold\s*soltion", "Gold Solution"),
+            (r"gold\s*soltion", "Gold Solution"),
+            (r"Golden\s*soltion", "Gold Solution"),
+            (r"golden\s*soltion", "Gold Solution"),
+            (r"Golden\s*answer\s*\?", "Golden answer:"),
+            (r"golden\s*answer\s*\?", "Golden answer:"),
+            (r"Aiscription", "Description"),
+            (r"\bSter\s+", "Step "),
+            (r"\bStel\s+", "Step "),
+            (r"\bStes\s+", "Step "),
+            (r"\bSte\s+", "Step "),
             (r"S0lution", "Solution"),
         ]
         for old, new in replacements:
@@ -133,7 +172,13 @@ class ExamParser:
         )
         text = re.sub(r"(\.|\?)\s+(\d+)\s*[\.\)]\s+", r"\1\n\2. ", text)
         text = re.sub(
-            r"(?<!\n)(\s*)((?:Gold\s+Solution|Model\s+Answer|Answer\s+Key|Expected\s+Answer|Correct\s+Answer|Solution:)[\s:]*)",
+            r"(?<!\n)(\s*)((?:Gold(?:en)?\s+(?:Solution|Answer|Soltion)|Model\s+Answer|Answer\s+Key|Expected\s+Answer|Correct\s+Answer|Solution:)[\s:?]*)",
+            r"\n\2",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"(?<!\n)(\s*)(Golden\s+answer\s*:?)",
             r"\n\2",
             text,
             flags=re.IGNORECASE,
@@ -141,8 +186,8 @@ class ExamParser:
         # Handwritten scans: "Q6." / "46." (Q misread) / "6." on their own line.
         text = re.sub(r"(?<!\n)(\s*)([Qq]\s*\d{1,2}\.?)\s*$", r"\n\2", text, flags=re.MULTILINE)
         text = re.sub(r"(?<!\n)(\s*)(\d{1,2}\.)\s*$", r"\n\2", text, flags=re.MULTILINE)
-        # Sub-parts like "a) Find the area" on handwritten uploads.
-        text = re.sub(r"(?<!\n)(\s*)([a-z]\)\s+\S)", r"\n\2", text, flags=re.IGNORECASE)
+        # Sub-parts like "a) Find the area" on handwritten uploads (line start only).
+        text = re.sub(r"(?m)^(\s*)([a-hj-z]\)\s+\S)", r"\n\2", text, flags=re.IGNORECASE)
         text = re.sub(r"\n\s*\n+", "\n\n", text)
         return text.strip()
 
@@ -210,6 +255,8 @@ class ExamParser:
         questions = self._extract_questions(lines)
         if not questions:
             questions = self._fallback_handwritten_questions(lines)
+        if not self._document_has_gold_markers(text):
+            self._promote_math_to_gold_steps(questions)
         total_points = sum(self._question_points_total(q) for q in questions)
 
         return {
@@ -231,6 +278,10 @@ class ExamParser:
 
     def _extract_title(self, lines: List[str]) -> str:
         for line in lines[:20]:
+            if looks_like_math_ocr(line) or looks_like_equation_line(line):
+                continue
+            if self._is_sub_question_line(line) or re.match(r"^\s*[a-h]\)\s*$", line, re.I):
+                continue
             lower = line.lower().strip()
             for marker in self.title_markers:
                 if marker in lower:
@@ -241,7 +292,8 @@ class ExamParser:
                     elif ":" in after_marker:
                         after_marker = after_marker.split(":", 1)[-1].strip()
                     if after_marker and len(after_marker) > 2:
-                        return after_marker
+                        if not looks_like_math_ocr(after_marker) and not looks_like_equation_line(after_marker):
+                            return after_marker
             if (
                 any(word in lower for word in ["exam", "test", "quiz", "assessment"])
                 and not self._is_question_header(line)
@@ -250,6 +302,12 @@ class ExamParser:
                 return line.strip()
         for line in lines[:10]:
             s = line.strip()
+            if looks_like_math_ocr(s) or looks_like_equation_line(s):
+                continue
+            if self._is_question_header(line):
+                continue
+            if self._is_sub_question_line(line) or re.match(r"^\s*[a-h]\)\s*$", s, re.I):
+                continue
             if (
                 s
                 and s != "="
@@ -258,7 +316,7 @@ class ExamParser:
                 and not re.match(r"^(?:question|q)\s*\d+", s, re.I)
             ):
                 return s
-        return lines[0].strip() if lines else "Imported Exam"
+        return "Imported Exam"
 
     def _extract_description(self, lines: List[str]) -> str:
         desc_lines = []
@@ -292,6 +350,10 @@ class ExamParser:
             if not s or s == "=" or len(s) < 2:
                 continue
             if re.match(r"^(?:exam\s+)?title\s*:", s, re.I) or re.match(r"^\d+[\.\)]\s*$", s):
+                continue
+            if self._is_sub_question_line(line) or re.match(r"^\s*[a-h]\)\s*", s, re.I):
+                continue
+            if looks_like_math_ocr(s) or looks_like_equation_line(s):
                 continue
             if re.match(r"^\s*SECTION\s", s, re.I):
                 continue
@@ -499,7 +561,17 @@ class ExamParser:
         m = self._lower_sub_re.match(line)
         if m:
             letter = (m.group(1) or m.group(2)).lower()
-            return ("lower", f"({letter})", m.group(3).strip(), 2)
+            text_after = m.group(3).strip()
+            if letter in ("t", "l", "r") and re.search(r"\\", text_after):
+                pass
+            elif m.group(2) and letter > "j":
+                pass
+            else:
+                return ("lower", f"({letter})", text_after, 2)
+
+        m = re.match(r"^\s*([a-h])\)\s*$", line.strip(), re.IGNORECASE)
+        if m:
+            return ("lower", f"({m.group(1).lower()})", "", 2)
 
         if self._sub_q_re.match(line):
             text = self._strip_sub_question_marker(line)
@@ -543,10 +615,10 @@ class ExamParser:
         buf = sub.pop("_buffer", None)
         if not buf:
             return
-        extra = " ".join(buf).strip()
+        extra = "\n".join(buf).strip()
         if extra:
             sub["text"] = (sub.get("text") or "").strip()
-            sub["text"] = f"{sub['text']} {extra}".strip() if sub["text"] else extra
+            sub["text"] = f"{sub['text']}\n{extra}".strip() if sub["text"] else extra
             text_clean, pts = self._extract_points_from_text(sub["text"])
             sub["text"] = text_clean
             sub["points"] = pts
@@ -583,10 +655,25 @@ class ExamParser:
         clean_line = re.sub(r"^\s*\d+[\.\)]\s*", "", clean_line).strip()
 
         points = 1
+        if "&" in clean_line:
+            left, right = clean_line.split("&", 1)
+            clean_line = left.strip()
+            loose_pts = re.search(r"(\d+)\s*(?:point|points|pts?|marks?)", right, re.I)
+            if loose_pts:
+                points = int(loose_pts.group(1))
+
+        clean_line = re.sub(r"\s*&\s*$", "", clean_line).strip()
+        clean_line = re.sub(r"\\quad\s*$", "", clean_line).strip()
+
         points_match = _MARK_RE.search(clean_line)
         if points_match:
             points = int(points_match.group(1))
             clean_line = _MARK_RE.sub("", clean_line, count=1).strip()
+        elif points == 1:
+            loose_pts = re.search(r"\((\d+)\s*(?:point|points|pts?|marks?)\)", clean_line, re.I)
+            if loose_pts:
+                points = int(loose_pts.group(1))
+                clean_line = clean_line[: loose_pts.start()].strip()
 
         return {
             "step_number": step_number,
@@ -616,6 +703,14 @@ class ExamParser:
 
         current_page = 0
         last_q_num = 0
+        gold_target: Optional[Dict] = None
+
+        def flush_gold_steps_to_target():
+            nonlocal current_steps, gold_target
+            if gold_target is not None and current_steps:
+                gold_target["gold_solution_steps"] = current_steps[:]
+            current_steps = []
+            gold_target = None
 
         def flush_current_sub():
             nonlocal current_sub, sub_depth, sub_parent
@@ -644,6 +739,8 @@ class ExamParser:
 
         def finalize_question(q: Dict):
             nonlocal current_sol_subs, current_sol_letter, has_roman_subs
+
+            flush_gold_steps_to_target()
 
             if current_sub is not None:
                 flush_all_subs()
@@ -721,6 +818,7 @@ class ExamParser:
             question_match = self._find_question_number(line, last_q_num=last_q_num, sub_depth=sub_depth)
             if question_match:
                 if current_question is not None:
+                    flush_gold_steps_to_target()
                     flush_all_subs()
                     finalize_question(current_question)
                     questions.append(current_question)
@@ -769,20 +867,49 @@ class ExamParser:
                         current_question["text"] = text_part
 
             elif current_question is not None:
-                if any(marker in lower for marker in self.gold_solution_markers):
-                    flush_all_subs()
+                if self._is_gold_marker_line(line):
+                    if current_sub is not None:
+                        self._flush_sub_buffer(current_sub)
+                    else:
+                        flush_all_subs()
+                    flush_gold_steps_to_target()
+                    gold_target = current_sub if current_sub is not None else current_question
                     current_section = "solution"
                     current_sol_letter = ""
-                    gold_text = re.split(
-                        "|".join(re.escape(m) for m in self.gold_solution_markers),
-                        line,
-                        flags=re.IGNORECASE,
-                    )[-1].strip()
+                    _, gold_text = self._split_gold_marker_line(line)
                     if gold_text and not self._is_sub_question_line(gold_text):
-                        step = self._parse_step(gold_text, len(current_steps) + 1)
-                        current_steps.append(step)
+                        current_steps = [self._parse_step(gold_text, 1)]
+                    else:
+                        current_steps = []
 
                 elif current_section == "solution":
+                    if self._is_sub_question_line(line) and not current_sol_letter:
+                        text_after = self._strip_sub_question_marker(line)
+                        looks_like_question = (
+                            self._has_mark(text_after)
+                            or bool(
+                                re.search(
+                                    r"(?i)\b(solve|find|evaluate|what is|explain|show|prove|calculate|describe)\b",
+                                    text_after,
+                                )
+                            )
+                        )
+                        if looks_like_question:
+                            flush_gold_steps_to_target()
+                            current_section = "text"
+                            marker = self._detect_sub_marker(
+                                line, sub_depth=0, last_q_num=last_q_num, has_roman_subs=False
+                            )
+                            if marker:
+                                _kind, label, sub_text, _level = marker
+                                flush_current_sub()
+                                siblings = current_question.setdefault("sub_questions", [])
+                                label = self._next_sub_label(siblings, label)
+                                current_sub = self._new_sub_question(label, sub_text)
+                                sub_depth = 1
+                            i += 1
+                            continue
+
                     if self._is_sub_question_line(line):
                         letter = self._extract_sub_letter(line)
                         text_after = self._strip_sub_question_marker(line)
@@ -869,7 +996,8 @@ class ExamParser:
                                 current_question["points"] = int(pts_m.group(1))
                                 line = _MARK_RE.sub("", line, count=1).strip()
                             if line:
-                                current_question["text"] += " " + line
+                                prev = (current_question.get("text") or "").strip()
+                                current_question["text"] = f"{prev}\n{line}".strip() if prev else line
 
             i += 1
 
@@ -905,6 +1033,66 @@ class ExamParser:
             self._normalize_sub_gold_steps(q.get("sub_questions") or [])
 
         return questions
+
+    def _split_math_lines(self, text: str) -> List[str]:
+        """Split OCR math into step lines (handles arrays expanded to one line in the parser)."""
+        if not text:
+            return []
+        if "\n" in text:
+            return [ln.strip() for ln in text.split("\n") if ln.strip()]
+        if text.count("=") >= 2:
+            parts = re.split(r"\s+(?=\d*\s*x\s*=)|\s+(?=x\s*=\s*\d)", text)
+            parts = [p.strip() for p in parts if p.strip()]
+            if len(parts) >= 2:
+                return parts
+        return [text.strip()]
+
+    def _is_math_step_line(self, line: str) -> bool:
+        s = (line or "").strip()
+        if not s:
+            return False
+        return looks_like_equation_line(s) or looks_like_math_ocr(s)
+
+    def _promote_math_to_gold_steps(self, questions: List[Dict]) -> None:
+        """Move OCR math lines into gold_solution_steps when no explicit rubric was parsed."""
+        for q in questions:
+            self._promote_one_question_gold(q, keep_text=False)
+            self._promote_sub_tree(q.get("sub_questions") or [])
+
+    def _promote_sub_tree(self, subs: List[Dict]) -> None:
+        for sub in subs:
+            self._promote_one_question_gold(sub, keep_text=True)
+            self._promote_sub_tree(sub.get("sub_questions") or [])
+
+    def _promote_one_question_gold(self, q: Dict, *, keep_text: bool) -> None:
+        steps = q.get("gold_solution_steps") or []
+        if any((s.get("expression") or "").strip() for s in steps):
+            return
+        raw = (q.get("text") or "").strip()
+        if not raw:
+            return
+        norm = normalize_exam_ocr_text(raw).strip().strip("$").strip()
+        lines = self._split_math_lines(norm)
+        math_lines = [ln for ln in lines if self._is_math_step_line(ln)]
+        prose_lines = [ln for ln in lines if not self._is_math_step_line(ln)]
+        if math_lines:
+            q["gold_solution_steps"] = [
+                self._parse_step(ln, idx) for idx, ln in enumerate(math_lines, start=1)
+            ]
+            if not keep_text and not prose_lines:
+                q["text"] = ""
+            elif prose_lines and not keep_text:
+                q["text"] = " ".join(prose_lines).strip()
+        elif prose_lines:
+            q["gold_solution_steps"] = [{
+                "step_number": 1,
+                "description": "Solution",
+                "expression": " ".join(prose_lines).strip(),
+                "points": q.get("points", 1),
+                "required": True,
+            }]
+            if not keep_text:
+                q["text"] = " ".join(prose_lines).strip()
 
     def _normalize_sub_gold_steps(self, subs: List[Dict]) -> None:
         for sub_q in subs:

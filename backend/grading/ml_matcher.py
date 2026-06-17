@@ -193,13 +193,20 @@ class MLMatcher:
             logger.debug(f"TF-IDF similarity failed: {e}")
             return 0.0
     
+    def _keyword_list_from_context(self, context: Dict) -> List[str]:
+        """Normalize keywords from question context (comma string or list)."""
+        raw = context.get("keywords", "")
+        if not raw:
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            return [str(k).strip().lower() for k in raw if str(k).strip()]
+        if isinstance(raw, str):
+            return [k.strip().lower() for k in raw.split(",") if k.strip()]
+        return [str(raw).strip().lower()] if str(raw).strip() else []
+
     def _keyword_match(self, student_text: str, gold_text: str, context: Dict) -> float:
         """Match based on keywords from question context"""
-        keywords = context.get('keywords', '')
-        if not keywords:
-            return 0.0
-        
-        keyword_list = [k.strip().lower() for k in keywords.split(',') if k.strip()]
+        keyword_list = self._keyword_list_from_context(context)
         if not keyword_list:
             return 0.0
         

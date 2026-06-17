@@ -37,6 +37,230 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { RichContentViewer } from '@/components/exam-taker/RichContentViewer';
+import { MixedMathContent } from '@/components/ui/StepMathContent';
+import { looksLikeTipTapHtml } from '@/lib/plainTextWithMathToDoc';
+
+type GroupedAnswerPart = {
+  answer: SubmissionAnswer | null;
+  question: ExamDetail['questions'] extends (infer Q)[] | undefined ? Q : any;
+  label: string;
+};
+
+type GroupedAnswerBlock = {
+  key: string;
+  topNumber: number;
+  topQuestion: ExamDetail['questions'] extends (infer Q)[] | undefined ? Q : any;
+  parts: GroupedAnswerPart[];
+  isMultiPart: boolean;
+};
+
+function subPartLabel(sub: { outlineTitle?: string | null }, index: number): string {
+  const title = sub.outlineTitle?.trim();
+  if (title) return title;
+  return `(${String.fromCharCode(97 + index)})`;
+}
+
+function findQuestionInTree(questions: ExamDetail['questions'], id: string): any {
+  for (const q of questions || []) {
+    if (q.id === id) return q;
+    for (const sub of q.subQuestions || []) {
+      if (sub.id === id) return sub;
+    }
+  }
+  return undefined;
+}
+
+function findTopQuestion(questions: ExamDetail['questions'], id: string): any {
+  for (const q of questions || []) {
+    if (q.id === id) return q;
+  }
+  return undefined;
+}
+
+function matchAnswerToSub(
+  sub: NonNullable<ExamDetail['questions']>[number],
+  subIndex: number,
+  topQ: NonNullable<ExamDetail['questions']>[number],
+  answers: SubmissionAnswer[],
+  byId: Map<string, SubmissionAnswer>,
+  used: Set<string>
+): SubmissionAnswer | null {
+  const direct = byId.get(sub.id);
+  if (direct && !used.has(direct.questionId)) return direct;
+
+  const subLabel = subPartLabel(sub, subIndex).replace(/[().]/g, '');
+  for (const ans of answers) {
+    if (used.has(ans.questionId)) continue;
+    if (ans.questionId === sub.id) return ans;
+    if (ans.parentQuestionId !== topQ.id) continue;
+    if (ans.outlineTitle && sub.outlineTitle && ans.outlineTitle === sub.outlineTitle) return ans;
+    const dl = (ans.displayLabel || '').toLowerCase();
+    if (sub.outlineTitle && dl.includes(sub.outlineTitle.toLowerCase())) return ans;
+    if (dl.includes(subLabel.toLowerCase())) return ans;
+  }
+  return null;
+}
+
+function buildGroupedSubmissionAnswers(
+  examQuestions: ExamDetail['questions'],
+  answers: SubmissionAnswer[] | undefined
+): GroupedAnswerBlock[] {
+  if (!answers?.length) return [];
+  const byId = new Map(answers.map((a) => [a.questionId, a]));
+  const used = new Set<string>();
+  const groups: GroupedAnswerBlock[] = [];
+
+  for (const topQ of examQuestions || []) {
+    const subs = topQ.subQuestions || [];
+    if (subs.length > 0) {
+      const parts: GroupedAnswerPart[] = subs.map((sub, si) => {
+        const ans = matchAnswerToSub(sub, si, topQ, answers, byId, used);
+        if (ans) used.add(ans.questionId);
+        return {
+          answer: ans,
+          question: sub,
+          label: ans?.displayLabel || subPartLabel(sub, si),
+        };
+      });
+
+      const parentAns = byId.get(topQ.id);
+      if (parentAns && !used.has(parentAns.questionId)) {
+        used.add(parentAns.questionId);
+        const targetIdx = parts.findIndex((p) => !p.answer);
+        if (targetIdx >= 0) parts[targetIdx].answer = parentAns;
+        else if (parts[0]) parts[0].answer = parentAns;
+      }
+
+      if (parts.some((p) => p.answer)) {
+        groups.push({
+          key: topQ.id,
+          topNumber: (topQ as any).number ?? groups.length + 1,
+          topQuestion: topQ,
+          parts,
+          isMultiPart: true,
+        });
+      }
+    } else {
+      const ans = byId.get(topQ.id);
+      if (ans) {
+        used.add(ans.questionId);
+        groups.push({
+          key: topQ.id,
+          topNumber: (topQ as any).number ?? groups.length + 1,
+          topQuestion: topQ,
+          parts: [
+            {
+              answer: ans,
+              question: topQ,
+              label: ans.displayLabel || `Q${(topQ as any).number ?? '?'}`,
+            },
+          ],
+          isMultiPart: false,
+        });
+      }
+    }
+  }
+
+  // Answers tagged with parentQuestionId but exam tree not loaded yet / stale ids
+  const byParent = new Map<string, SubmissionAnswer[]>();
+  for (const ans of answers) {
+    if (used.has(ans.questionId)) continue;
+    if (ans.parentQuestionId) {
+      const list = byParent.get(ans.parentQuestionId) || [];
+      list.push(ans);
+      byParent.set(ans.parentQuestionId, list);
+    }
+  }
+  for (const [parentId, parentAnswers] of byParent) {
+    if (used.has(parentAnswers[0]?.questionId)) continue;
+    const topQ = findTopQuestion(examQuestions, parentId);
+    const subs = topQ?.subQuestions || [];
+    if (subs.length > 0) {
+      const parts: GroupedAnswerPart[] = subs.map((sub, si) => {
+        const ans =
+          parentAnswers.find(
+            (a) =>
+              a.questionId === sub.id ||
+              a.outlineTitle === sub.outlineTitle ||
+              (a.displayLabel || '').includes(subPartLabel(sub, si))
+          ) || null;
+        if (ans) used.add(ans.questionId);
+        return {
+          answer: ans,
+          question: sub,
+          label: ans?.displayLabel || subPartLabel(sub, si),
+        };
+      });
+      for (const ans of parentAnswers) {
+        if (used.has(ans.questionId)) continue;
+        const emptyIdx = parts.findIndex((p) => !p.answer);
+        if (emptyIdx >= 0) {
+          parts[emptyIdx].answer = ans;
+          used.add(ans.questionId);
+        }
+      }
+      if (parts.some((p) => p.answer)) {
+        groups.push({
+          key: parentId,
+          topNumber:
+            (topQ as any)?.number ??
+            parentAnswers[0]?.questionNumber ??
+            groups.length + 1,
+          topQuestion: topQ ?? null,
+          parts,
+          isMultiPart: true,
+        });
+        parentAnswers.forEach((a) => used.add(a.questionId));
+      }
+    }
+  }
+
+  for (const ans of answers) {
+    if (used.has(ans.questionId)) continue;
+    groups.push({
+      key: ans.questionId,
+      topNumber: ans.questionNumber,
+      topQuestion: findQuestionInTree(examQuestions, ans.questionId) ?? null,
+      parts: [
+        {
+          answer: ans,
+          question: findQuestionInTree(examQuestions, ans.questionId) ?? null,
+          label: ans.displayLabel || `Q${ans.questionNumber}`,
+        },
+      ],
+      isMultiPart: false,
+    });
+    used.add(ans.questionId);
+  }
+
+  return groups.sort((a, b) => a.topNumber - b.topNumber);
+}
+
+function SubmissionSubQuestionOutline({
+  subs,
+}: {
+  subs: NonNullable<ExamDetail['questions']>[number]['subQuestions'];
+}) {
+  if (!subs?.length) return null;
+  return (
+    <div className="mt-4 space-y-3 rounded-xl border border-primary/20 bg-muted/25 px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Sub-questions
+      </p>
+      {subs.map((sub, idx) => (
+        <div key={sub.id || idx} className="flex gap-3 border-l-2 border-primary/30 pl-2">
+          <span className="shrink-0 pt-0.5 font-semibold text-primary min-w-[2rem]">
+            {subPartLabel(sub, idx)}
+          </span>
+          <div className="min-w-0 flex-1 text-sm">
+            <RichContentViewer content={sub.richContent || sub.text || ''} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Status badge colours */
 const STATUS_STYLES: Record<string, string> = {
@@ -81,6 +305,10 @@ function answerLooksLikeRichHtml(s: string): boolean {
   return /<\s*[a-zA-Z]/.test(s);
 }
 
+function looksLikeOcrLineBreakHtml(s: string): boolean {
+  return /<\s*br\s*\/?>/i.test(s);
+}
+
 function RenderedExtractedMath({ latex, displayMode }: { latex: string; displayMode?: boolean }) {
   const html = useMemo(() => {
     try {
@@ -107,39 +335,79 @@ function RenderedExtractedMath({ latex, displayMode }: { latex: string; displayM
   );
 }
 
+function looksLikeSympyInternal(s: string): boolean {
+  return /\*\*/.test(s) || (/^[0-9a-zA-Z+\-*/().,\s^]+$/.test(s) && s.includes('*') && !s.includes('$'));
+}
+
+function looksLikeGarbledLatexReadable(s: string): boolean {
+  return /end\{array\}|begin\{array\}/.test(s) || /\\[a-z]+\s*\{/.test(s);
+}
+
+function pickDisplayLatex(answer: SubmissionAnswer): string | null {
+  const ml = (answer.extractedMathLatex || '').trim();
+  const raw = (answer.extractedLatex || '').trim();
+  if (raw && (raw.includes('\\') || raw.includes('^') || raw.includes('frac'))) {
+    return raw.replace(/^\$+|\$+$/g, '');
+  }
+  if (ml && !looksLikeSympyInternal(ml)) {
+    return ml.replace(/^\$+|\$+$/g, '');
+  }
+  return ml && !looksLikeSympyInternal(ml) ? ml : null;
+}
+
 function StudentExtractedAnswerBlock({ answer }: { answer: SubmissionAnswer }) {
   const rawText = answer.extractedText;
   const disp = answer.extractedTextDisplay;
-  const ml = answer.extractedMathLatex;
-  const rawLatex = answer.extractedLatex;
+  const source = (disp || rawText || '').trim();
+  const ml = pickDisplayLatex(answer);
 
-  if (rawText && answerLooksLikeRichHtml(rawText)) {
+  if (source && looksLikeOcrLineBreakHtml(source) && !looksLikeTipTapHtml(source)) {
+    return <MixedMathContent text={source} />;
+  }
+
+  if (source && (answerLooksLikeRichHtml(source) || looksLikeTipTapHtml(source))) {
     return (
-      <div className="space-y-3">
-        {ml ? <RenderedExtractedMath latex={ml} /> : null}
-        <div
-          className="prose prose-base max-w-none prose-p:leading-relaxed prose-headings:font-semibold"
-          dangerouslySetInnerHTML={{ __html: rawText }}
-        />
+      <div className="prose prose-base max-w-none">
+        <RichContentViewer content={source} />
       </div>
     );
   }
 
-  const line = (disp || rawText || rawLatex || '').trim() || 'No answer provided';
-  const showNoiseHint =
-    !!rawText && !disp && !ml && line !== 'No answer provided' && line.length > 80;
+  if (source) {
+    return <MixedMathContent text={source} />;
+  }
+
+  if (ml) {
+    return (
+      <div className="space-y-3">
+        {ml.split(/\n+/).map((block, i) => (
+          <RenderedExtractedMath key={i} latex={block} />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-3">
-      {ml ? <RenderedExtractedMath latex={ml} /> : null}
-      <p className="text-base leading-relaxed break-words font-medium text-foreground">{line}</p>
-      {showNoiseHint ? (
-        <p className="text-xs text-muted-foreground">
-          Showing raw OCR text. If this looks garbled, open the submitted file or try a clearer scan.
-        </p>
-      ) : null}
-    </div>
+    <p className="text-base leading-relaxed break-words font-medium text-foreground">
+      No answer provided
+    </p>
   );
+}
+
+function StepExpectedCell({ step }: { step: { expected?: string; expectedDisplay?: string; expectedMathLatex?: string } }) {
+  const full = (step.expected ?? step.expectedDisplay ?? step.expectedMathLatex ?? '').trim();
+  return <MixedMathContent text={full} displayMode={false} />;
+}
+
+function StepReceivedCell({
+  step,
+}: {
+  step: { received?: string; receivedDisplay?: string; receivedMathLatex?: string };
+}) {
+  const full = (step.received ?? step.receivedDisplay ?? step.receivedMathLatex ?? '').trim();
+  if (!full || full === '—') return <span>—</span>;
+  if (looksLikeSympyInternal(full)) return <span>—</span>;
+  return <MixedMathContent text={full} displayMode={false} />;
 }
 
 export default function SubmissionDetail() {
@@ -209,6 +477,15 @@ export default function SubmissionDetail() {
       );
     },
     onError: (err: any) => toast.error('Failed to reject: ' + err.message),
+  });
+
+  const regradeMutation = useMutation({
+    mutationFn: () => submissionsAPI.grade(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['submission', id] });
+      toast.success('AI grading re-run complete');
+    },
+    onError: (err: any) => toast.error('Failed to re-run grading: ' + err.message),
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -307,6 +584,11 @@ export default function SubmissionDetail() {
     adjustGradesMutation.mutate(adjustments);
   };
 
+  const groupedAnswers = useMemo(
+    () => buildGroupedSubmissionAnswers(exam?.questions, submission?.answers),
+    [exam?.questions, submission?.answers]
+  );
+
   // ── Render guards ─────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -334,12 +616,17 @@ export default function SubmissionDetail() {
         acc + (a.gradingResult?.score ?? 0),
       0
     ) ?? 0;
-  const effectiveTotalScore =
-    submission.totalScore != null
+  const ungradedAnswerCount =
+    submission.answers?.filter(
+      (a: SubmissionAnswer) =>
+        (a.extractedTextDisplay || a.extractedText || a.extractedMathLatex) &&
+        !a.gradingResult
+    ).length ?? 0;
+  const effectiveTotalScore = hasGradingData
+    ? sumFromAnswerGrades
+    : submission.totalScore != null
       ? submission.totalScore
-      : hasGradingData
-        ? sumFromAnswerGrades
-        : null;
+      : null;
 
   const scorePercentage =
     effectiveTotalScore != null && submission.maxScore > 0
@@ -358,7 +645,7 @@ export default function SubmissionDetail() {
     ? submission.answers?.find((a) => a.questionId === compareQuestionId)
     : null;
   const activeCompareQuestion = compareQuestionId
-    ? exam?.questions?.find((q) => q.id === compareQuestionId)
+    ? findQuestionInTree(exam?.questions, compareQuestionId)
     : null;
   const activeCompareResult = activeCompareAnswer?.gradingResult;
   const activeCompareGid =
@@ -431,6 +718,23 @@ export default function SubmissionDetail() {
 
               {isProfessor && (
                 <>
+                  {ungradedAnswerCount > 0 && !isEditMode && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => regradeMutation.mutate()}
+                      disabled={regradeMutation.isPending}
+                      className={cn('h-9', btnSecondary)}
+                    >
+                      {regradeMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 mr-2" />
+                      )}
+                      Re-run AI grading
+                    </Button>
+                  )}
+
                   {canEdit && !isEditMode && (
                     <Button size="sm" onClick={enterEditMode} className={cn('h-9', btnPrimary)}>
                       <Edit2 className="h-4 w-4 mr-2" />
@@ -609,14 +913,361 @@ export default function SubmissionDetail() {
           </div>
           {submission.answers && submission.answers.length > 0 && (
             <span className="inline-flex items-center rounded-full bg-violet-100 dark:bg-violet-950/80 px-3 py-1 text-sm font-semibold text-violet-900 dark:text-violet-200 border border-violet-200/80 dark:border-violet-800">
-              {submission.answers.length} question{submission.answers.length === 1 ? '' : 's'}
+              {groupedAnswers.length} question{groupedAnswers.length === 1 ? '' : 's'}
             </span>
           )}
         </div>
 
-        {submission.answers && submission.answers.length > 0 ? (
+        {groupedAnswers.length > 0 ? (
+          groupedAnswers.map((group, index) => {
+            const partScores = group.parts
+              .map((p) => p.answer?.gradingResult)
+              .filter(Boolean) as NonNullable<SubmissionAnswer['gradingResult']>[];
+            const combinedScore = partScores.reduce((s, r) => s + (r.score ?? 0), 0);
+            const combinedMax = partScores.reduce((s, r) => s + (r.maxScore ?? 0), 0);
+            const headerResult = group.isMultiPart
+              ? partScores.length > 0
+                ? { score: combinedScore, maxScore: combinedMax, isCorrect: combinedScore >= combinedMax }
+                : null
+              : group.parts[0]?.answer.gradingResult ?? null;
+
+            return (
+              <Card
+                key={group.key}
+                className={cn('animate-fade-up', surfaceCard)}
+                style={{ animationDelay: `${index * 80}ms` }}
+              >
+                <CardHeader className="pb-4 border-b border-violet-100/80 bg-gradient-to-r from-violet-50/50 to-transparent dark:from-violet-950/25 dark:border-violet-900/40">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex gap-3 min-w-0">
+                      <span
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-sm font-bold text-white shadow-md ring-2 ring-violet-200/50 dark:ring-violet-800/50"
+                        aria-hidden
+                      >
+                        {group.topNumber}
+                      </span>
+                      <div className="min-w-0 pt-0.5">
+                        <CardTitle className="text-lg font-bold text-foreground">
+                          Question {group.topNumber}
+                          {group.isMultiPart ? (
+                            <span className="ml-2 text-sm font-medium text-muted-foreground">
+                              ({group.parts.length} parts)
+                            </span>
+                          ) : null}
+                        </CardTitle>
+                        {group.topQuestion && (
+                          <div className="text-base text-muted-foreground mt-2 leading-relaxed">
+                            <RichContentViewer
+                              content={group.topQuestion.richContent || group.topQuestion.text || ''}
+                            />
+                          </div>
+                        )}
+                        {group.isMultiPart && group.topQuestion?.subQuestions?.length ? (
+                          <SubmissionSubQuestionOutline subs={group.topQuestion.subQuestions} />
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-stretch sm:items-end gap-2 shrink-0">
+                      {headerResult && !group.isMultiPart && (
+                        isEditMode && compareQuestionId !== group.parts[0].answer.questionId ? (
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Label className="text-sm text-muted-foreground whitespace-nowrap">Score:</Label>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={headerResult.maxScore}
+                              step={0.5}
+                              className="w-[5.5rem] h-9 text-base"
+                              defaultValue={headerResult.score}
+                              onChange={(e) => {
+                                const gid =
+                                  headerResult.id ?? group.parts[0].answer?.gradingResultId;
+                                if (!gid) return;
+                                setEditingGrades((prev) => ({
+                                  ...prev,
+                                  [gid]: { ...prev[gid], score: parseFloat(e.target.value) },
+                                }));
+                              }}
+                            />
+                            <span className="text-base text-muted-foreground shrink-0">
+                              / {headerResult.maxScore} pts
+                            </span>
+                          </div>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'shrink-0 text-sm px-2.5 py-0.5 font-medium',
+                              headerResult.isCorrect ? BADGE_OK : BADGE_REVIEW
+                            )}
+                          >
+                            {headerResult.score} / {headerResult.maxScore} pts
+                          </Badge>
+                        )
+                      )}
+                      {headerResult && group.isMultiPart && (
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'shrink-0 text-sm px-2.5 py-0.5 font-medium',
+                            headerResult.isCorrect ? BADGE_OK : BADGE_REVIEW
+                          )}
+                        >
+                          {headerResult.score} / {headerResult.maxScore} pts total
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="space-y-8 text-base px-5 sm:px-6 py-6">
+                  {group.parts.map((part, partIdx) => {
+                    const answer = part.answer;
+                    const question = part.question;
+                    const result = answer?.gradingResult;
+                    const gid = result?.id ?? answer?.gradingResultId;
+
+                    if (group.isMultiPart && !answer) {
+                      return (
+                        <div
+                          key={`${part.label}-${partIdx}`}
+                          className={cn(
+                            partIdx > 0 && 'pt-6 border-t border-violet-100/80 dark:border-violet-900/40'
+                          )}
+                        >
+                          <div className="mb-4 space-y-2">
+                            <Badge variant="secondary" className="font-semibold">
+                              {part.label}
+                            </Badge>
+                            {question && (
+                              <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-sm">
+                                <RichContentViewer
+                                  content={question.richContent || question.text || ''}
+                                />
+                              </div>
+                            )}
+                          </div>
+                          <div className="rounded-xl border border-dashed border-border/70 bg-muted/15 px-4 py-6 text-center text-sm text-muted-foreground">
+                            No answer submitted for this part.
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    if (!answer) return null;
+
+                    return (
+                      <div
+                        key={answer.questionId}
+                        className={cn(
+                          group.isMultiPart && partIdx > 0 && 'pt-6 border-t border-violet-100/80 dark:border-violet-900/40'
+                        )}
+                      >
+                        {group.isMultiPart && (
+                          <div className="mb-4 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="secondary" className="font-semibold">
+                                {part.label}
+                              </Badge>
+                              {result && (
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    'text-xs',
+                                    result.isCorrect ? BADGE_OK : BADGE_REVIEW
+                                  )}
+                                >
+                                  {result.score} / {result.maxScore} pts
+                                </Badge>
+                              )}
+                              {(isProfessor || studentGradesPublished) && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className={cn('h-8 px-3 ml-auto', btnSecondary)}
+                                  onClick={() => setCompareQuestionId(answer.questionId)}
+                                >
+                                  <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
+                                  {isProfessor ? 'Compare' : 'Details'}
+                                </Button>
+                              )}
+                            </div>
+                            {question && (
+                              <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-sm">
+                                <RichContentViewer
+                                  content={question.richContent || question.text || ''}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {!group.isMultiPart && (isProfessor || studentGradesPublished) && (
+                          <div className="flex justify-end mb-4">
+                            <Button
+                              type="button"
+                              size="sm"
+                              className={cn('h-10 px-4', btnPrimary)}
+                              onClick={() => setCompareQuestionId(answer.questionId)}
+                            >
+                              <Maximize2 className="h-4 w-4 mr-2" />
+                              {isProfessor ? 'View full comparison' : 'View details'}
+                            </Button>
+                          </div>
+                        )}
+
+                        <div className="relative rounded-xl border-2 border-violet-100 bg-gradient-to-b from-violet-50/40 to-muted/30 p-4 dark:border-violet-900/40 dark:from-violet-950/20">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 rounded-l-xl bg-violet-500/80 dark:bg-violet-500" aria-hidden />
+                          <p className="text-sm font-bold text-violet-900 dark:text-violet-200 mb-3 pl-2 uppercase tracking-wide flex items-center gap-2">
+                            <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+                            {group.isMultiPart ? `${part.label} — answer` : "Student's answer"}
+                          </p>
+                          <StudentExtractedAnswerBlock answer={answer} />
+                        </div>
+
+                        {result?.stepResults && result.stepResults.length > 0 && (
+                          <div className="space-y-4 rounded-xl border border-border/80 bg-muted/20 p-4 dark:bg-muted/10 mt-6">
+                            <p className="text-sm font-bold text-foreground uppercase tracking-wide flex items-center gap-2 border-b border-border/60 pb-3">
+                              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200 text-xs font-bold">
+                                AI
+                              </span>
+                              Step-by-step analysis
+                              {group.isMultiPart ? ` · ${part.label}` : ''}
+                            </p>
+                            {result.stepResults.map((step: any) => (
+                              <div
+                                key={step.stepNumber}
+                                className={cn(
+                                  'flex items-start gap-3 p-4 rounded-xl border',
+                                  step.isCorrect ? STEP_OK : STEP_REVIEW
+                                )}
+                              >
+                                {step.isCorrect ? (
+                                  <CheckCircle2 className="h-6 w-6 text-emerald-700 mt-0.5 shrink-0" />
+                                ) : (
+                                  <MinusCircle className="h-6 w-6 text-amber-800/90 mt-0.5 shrink-0" />
+                                )}
+
+                                <div className="flex-1 space-y-2 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-semibold text-base">Step {step.stepNumber}</span>
+
+                                    {isEditMode && compareQuestionId !== answer.questionId ? (
+                                      <div className="flex items-center gap-1">
+                                        <Input
+                                          type="number"
+                                          min={0}
+                                          max={step.maxScore}
+                                          step={0.5}
+                                          className="w-[4.5rem] h-8 text-sm"
+                                          defaultValue={step.score}
+                                          onChange={(e) =>
+                                            setEditingSteps((prev) => ({
+                                              ...prev,
+                                              [step.id]: {
+                                                ...prev[step.id],
+                                                score: parseFloat(e.target.value),
+                                              },
+                                            }))
+                                          }
+                                        />
+                                        <span className="text-sm text-muted-foreground">
+                                          / {step.maxScore} pts
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <Badge variant="secondary" className="text-sm font-medium">
+                                        {step.score} / {step.maxScore} pts
+                                      </Badge>
+                                    )}
+                                  </div>
+
+                                  {(step.expected || step.received) && (
+                                    <div className="grid grid-cols-2 gap-3 text-sm pt-0.5">
+                                      <div className="rounded-lg bg-background/95 border border-border/80 p-3 min-w-0">
+                                        <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
+                                          Expected (matched target)
+                                        </span>
+                                        <div className="min-w-0">
+                                          <StepExpectedCell step={step} />
+                                        </div>
+                                      </div>
+                                      <div className="rounded-lg bg-background/95 border border-border/80 p-3 min-w-0">
+                                        <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
+                                          Received (extracted)
+                                        </span>
+                                        <div className="space-y-2 min-w-0">
+                                          <StepReceivedCell step={step} />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {isEditMode && compareQuestionId !== answer.questionId ? (
+                                    <Textarea
+                                      className="text-base min-h-[72px] leading-relaxed"
+                                      defaultValue={step.feedback ?? ''}
+                                      placeholder="Feedback for this step…"
+                                      onChange={(e) =>
+                                        setEditingSteps((prev) => ({
+                                          ...prev,
+                                          [step.id]: { ...prev[step.id], feedback: e.target.value },
+                                        }))
+                                      }
+                                    />
+                                  ) : (
+                                    step.feedback && (
+                                      <p className="text-base text-muted-foreground leading-relaxed">{step.feedback}</p>
+                                    )
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {isEditMode && compareQuestionId !== answer.questionId ? (
+                          <div className="space-y-2 mt-6">
+                            <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                              Overall Feedback
+                              {group.isMultiPart ? ` · ${part.label}` : ''}
+                            </Label>
+                            <Textarea
+                              className="min-h-[88px] text-base leading-relaxed"
+                              defaultValue={result?.feedback ?? ''}
+                              placeholder="Add feedback for this question…"
+                              onChange={(e) =>
+                                gid &&
+                                setEditingGrades((prev) => ({
+                                  ...prev,
+                                  [gid]: { ...prev[gid], feedback: e.target.value },
+                                }))
+                              }
+                            />
+                          </div>
+                        ) : result?.feedback && result.feedback.trim() !== '' ? (
+                          <div className="flex items-start gap-3 p-4 rounded-xl bg-violet-50/60 border border-violet-200/70 dark:bg-violet-950/30 dark:border-violet-800/50 mt-6">
+                            <AlertCircle className="h-6 w-6 text-violet-700 dark:text-violet-400 mt-0.5 shrink-0" />
+                            <div>
+                              <p className="font-semibold text-base text-foreground">
+                                Feedback{group.isMultiPart ? ` · ${part.label}` : ''}
+                              </p>
+                              <p className="text-base text-muted-foreground leading-relaxed mt-1">{result.feedback}</p>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </Card>
+            );
+          })
+        ) : submission.answers && submission.answers.length > 0 ? (
           submission.answers.map((answer: any, index: number) => {
-            const question = exam?.questions?.find((q: any) => q.id === answer.questionId);
+            const question = findQuestionInTree(exam?.questions, answer.questionId);
             const result = answer.gradingResult;
             const gid = result?.id ?? answer.gradingResultId;
 
@@ -637,18 +1288,17 @@ export default function SubmissionDetail() {
                       </span>
                       <div className="min-w-0 pt-0.5">
                         <CardTitle className="text-lg font-bold text-foreground">
-                          Question {answer.questionNumber}
+                          {answer.displayLabel || `Question ${answer.questionNumber}`}
                         </CardTitle>
                         {question && (
-                          <p className="text-base text-muted-foreground mt-2 leading-relaxed">
-                            {question.text}
-                          </p>
+                          <div className="text-base text-muted-foreground mt-2 leading-relaxed">
+                            <RichContentViewer content={question.richContent || question.text || ''} />
+                          </div>
                         )}
                       </div>
                     </div>
 
                     <div className="flex flex-col items-stretch sm:items-end gap-2 shrink-0">
-                      {/* Score badge / editable score (hidden while compare modal open for this question) */}
                       {result && (
                         isEditMode && compareQuestionId !== answer.questionId ? (
                           <div className="flex items-center gap-1.5 shrink-0">
@@ -699,7 +1349,6 @@ export default function SubmissionDetail() {
                 </CardHeader>
 
                 <CardContent className="space-y-6 text-base px-5 sm:px-6 py-6">
-                  {/* Student's answer */}
                   <div className="relative rounded-xl border-2 border-violet-100 bg-gradient-to-b from-violet-50/40 to-muted/30 p-4 dark:border-violet-900/40 dark:from-violet-950/20">
                     <div className="absolute left-0 top-0 bottom-0 w-1 rounded-l-xl bg-violet-500/80 dark:bg-violet-500" aria-hidden />
                     <p className="text-sm font-bold text-violet-900 dark:text-violet-200 mb-3 pl-2 uppercase tracking-wide flex items-center gap-2">
@@ -709,7 +1358,6 @@ export default function SubmissionDetail() {
                     <StudentExtractedAnswerBlock answer={answer} />
                   </div>
 
-                  {/* Step-by-step results */}
                   {result?.stepResults && result.stepResults.length > 0 && (
                     <div className="space-y-4 rounded-xl border border-border/80 bg-muted/20 p-4 dark:bg-muted/10">
                       <p className="text-sm font-bold text-foreground uppercase tracking-wide flex items-center gap-2 border-b border-border/60 pb-3">
@@ -772,21 +1420,16 @@ export default function SubmissionDetail() {
                                   <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
                                     Expected (matched target)
                                   </span>
-                                  <span className="font-mono break-words block text-[0.95rem] leading-snug">
-                                    {step.expectedDisplay ?? step.expected ?? '—'}
-                                  </span>
+                                    <div className="min-w-0">
+                                      <StepExpectedCell step={step} />
+                                    </div>
                                 </div>
                                 <div className="rounded-lg bg-background/95 border border-border/80 p-3 min-w-0">
                                   <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
                                     Received (extracted)
                                   </span>
                                   <div className="space-y-2 min-w-0">
-                                    {step.receivedMathLatex ? (
-                                      <RenderedExtractedMath latex={step.receivedMathLatex} displayMode={false} />
-                                    ) : null}
-                                    <span className="font-mono break-words block text-[0.95rem] leading-snug">
-                                      {step.receivedDisplay ?? step.received ?? '—'}
-                                    </span>
+                                    <StepReceivedCell step={step} />
                                   </div>
                                 </div>
                               </div>
@@ -815,7 +1458,6 @@ export default function SubmissionDetail() {
                     </div>
                   )}
 
-                  {/* Overall question feedback */}
                   {isEditMode && compareQuestionId !== answer.questionId ? (
                     <div className="space-y-2">
                       <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
@@ -1005,9 +1647,9 @@ export default function SubmissionDetail() {
                                 {st.description ? (
                                   <p className="text-muted-foreground text-base mb-1.5 leading-relaxed">{st.description}</p>
                                 ) : null}
-                                <p className="font-mono text-[0.95rem] break-words leading-snug">
-                                  {st.latex || st.expression}
-                                </p>
+                                {(st.latex || st.expression) ? (
+                                  <MixedMathContent text={st.latex || st.expression || ''} displayMode={false} />
+                                ) : null}
                               </li>
                             ))}
                           </ul>
@@ -1022,10 +1664,14 @@ export default function SubmissionDetail() {
                             <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                               Final answer (reference)
                             </p>
-                            <p className="font-mono text-base leading-relaxed">
-                              {activeCompareQuestion?.finalAnswerLatex ||
-                                activeCompareQuestion?.finalAnswer}
-                            </p>
+                            <MixedMathContent
+                              text={
+                                activeCompareQuestion?.finalAnswerLatex ||
+                                activeCompareQuestion?.finalAnswer ||
+                                ''
+                              }
+                              displayMode={false}
+                            />
                           </div>
                         )}
                       </div>
@@ -1163,21 +1809,16 @@ export default function SubmissionDetail() {
                                             <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
                                               Expected (matched target)
                                             </span>
-                                            <span className="font-mono break-words text-[0.95rem] leading-snug">
-                                              {step.expectedDisplay ?? step.expected ?? '—'}
-                                            </span>
+                                            <div className="min-w-0">
+                                              <StepExpectedCell step={step} />
+                                            </div>
                                           </div>
                                           <div className="rounded-lg bg-background/95 border border-border/80 p-3 min-w-0">
                                             <span className="text-muted-foreground block mb-1 text-xs font-medium uppercase tracking-wide">
                                               Received (extracted)
                                             </span>
                                             <div className="space-y-2 min-w-0">
-                                              {step.receivedMathLatex ? (
-                                                <RenderedExtractedMath latex={step.receivedMathLatex} displayMode={false} />
-                                              ) : null}
-                                              <span className="font-mono break-words text-[0.95rem] leading-snug">
-                                                {step.receivedDisplay ?? step.received ?? '—'}
-                                              </span>
+                                              <StepReceivedCell step={step} />
                                             </div>
                                           </div>
                                         </div>
@@ -1263,7 +1904,9 @@ export default function SubmissionDetail() {
                     <p className="text-base text-muted-foreground text-center py-3 leading-relaxed">
                       {submission.status === 'pending' || submission.status === 'grading'
                         ? 'Grading is not available for this question yet.'
-                        : 'No grading details for this question.'}
+                        : activeCompareAnswer && isProfessor
+                          ? 'This answer was captured but not scored. Use Re-run AI grading in the toolbar to grade it.'
+                          : 'No grading details for this question.'}
                     </p>
                   )}
                 </div>

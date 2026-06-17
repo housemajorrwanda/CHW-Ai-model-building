@@ -125,13 +125,17 @@ def _sympy_try(s: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
-def _maybe_katex_from_latex(raw: str) -> Optional[str]:
+def _maybe_katex_from_latex(raw: str, max_len: int = 4000) -> Optional[str]:
     s = raw.strip().strip("$")
-    if not s or len(s) > 400:
+    if not s or len(s) > max_len:
         return None
     if sum(1 for c in s if ord(c) > 126) > len(s) * 0.25:
         return None
     return s
+
+
+def _is_complex_latex(s: str) -> bool:
+    return bool(re.search(r"\\begin\{|\\end\{|\\\\", s or ""))
 
 
 @dataclass
@@ -162,7 +166,7 @@ def polish_ocr_for_submission_display(
         p_t, l_t = _sympy_try(frag)
         if l_t:
             math_latex = l_t
-        if p_t:
+        if p_t and "**" not in p_t:
             display = p_t
         elif len(frag) < len(plain_text) * 0.92 or _fragment_score(frag) >= 0.3:
             display = frag if frag.strip() else cleaned
@@ -170,17 +174,23 @@ def polish_ocr_for_submission_display(
             display = cleaned or plain_text
 
     if raw_latex:
-        readable_l = latex_to_readable(raw_latex)
-        p_l, l_l = _sympy_try(readable_l)
-        if l_l:
-            math_latex = math_latex or l_l
-        if p_l and (not display or len(p_l) < len(display)):
-            display = p_l
-        elif readable_l and not display:
-            display = readable_l
-        k = _maybe_katex_from_latex(raw_latex)
-        if not math_latex and k and ("\\" in k or "^" in k or "_" in k or "frac" in k):
-            math_latex = k
+        if _is_complex_latex(raw_latex):
+            k = _maybe_katex_from_latex(raw_latex)
+            if k:
+                math_latex = k
+                display = ""
+        else:
+            readable_l = latex_to_readable(raw_latex)
+            p_l, l_l = _sympy_try(readable_l)
+            if l_l:
+                math_latex = math_latex or l_l
+            if p_l and "**" not in p_l and (not display or len(p_l) < len(display)):
+                display = p_l
+            elif readable_l and not display:
+                display = readable_l
+            k = _maybe_katex_from_latex(raw_latex)
+            if not math_latex and k and ("\\" in k or "^" in k or "_" in k or "frac" in k):
+                math_latex = k
 
     if is_html and plain_text and not display:
         display = plain_text
@@ -191,15 +201,96 @@ def polish_ocr_for_submission_display(
     return OcrDisplayPolish(display.strip(), math_latex)
 
 
+def _extract_latex_from_html(html: str) -> Optional[str]:
+    if not html:
+        return None
+    from html import unescape
+
+    chunks = []
+    for m in re.finditer(r'data-latex=(["\'])(.*?)\1', html, re.DOTALL):
+        c = unescape(m.group(2)).strip()
+        if c:
+            chunks.append(c)
+    if chunks:
+        return "\n".join(chunks)
+    return None
+
+
+def _strip_step_noise(s: str) -> str:
+    from html import unescape
+
+    t = unescape(s or "")
+    t = re.sub(r"<\s*br\s*/?>", " ", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = re.sub(r"^\{\s*\d+\s*\}\s*", "", t.strip())
+    t = re.sub(r"(^|\s)l\s*\(", r"\1\\left(", t, flags=re.I)
+    t = re.sub(r"\)\s*\$\s*(?=[a-zA-Z(])", ") ", t)
+    t = re.sub(
+        r"\(\s*(\d+)\s*\$\s*(points?|pts?)\s*\$",
+        r"(\1 \\text{ \2 })",
+        t,
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _normalize_spaced_latex(s: str) -> str:
+    t = s
+    t = t.replace("\\left", "\x00LEFT\x00")
+    t = t.replace("\\right", "\x00RIGHT\x00")
+    t = t.replace("\\frac", "\x00FRAC\x00")
+    t = re.sub(r"\s*\^\s*\{\s*", "^{", t)
+    t = re.sub(r"\s+\}", "}", t)
+    t = re.sub(r"\(\s+", "(", t)
+    t = re.sub(r"\s+\)", ")", t)
+    t = re.sub(r" +", " ", t).strip()
+    t = t.replace("\x00LEFT\x00", "\\left")
+    t = t.replace("\x00RIGHT\x00", "\\right")
+    t = t.replace("\x00FRAC\x00", "\\frac")
+    t = re.sub(r"\\left\s*\(\s*", r"\\left(", t)
+    t = re.sub(r"\s*\\right\s*\)", r"\\right)", t)
+    return t.strip()
+
+
+def _latex_from_messy_step_text(t: str) -> Optional[str]:
+    s = _strip_step_noise(t)
+    if not s or s == "—":
+        return None
+    if re.search(r"\\(?:left|right|frac|sqrt|begin|sum|int)\b", s) or "$" in s:
+        candidate = _normalize_spaced_latex(s.strip("$ "))
+        return _maybe_katex_from_latex(candidate)
+    m = re.search(r"\$([^$]+)\$", s)
+    if m:
+        return _maybe_katex_from_latex(_normalize_spaced_latex(m.group(1)))
+    return None
+
+
 def polish_step_snippet(text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """Returns (cleaner plain, optional LaTeX) for a step cell; plain None if no gain."""
     t = (text or "").strip()
     if not t:
         return None, None
+
+    messy_latex = _latex_from_messy_step_text(t)
+    if messy_latex:
+        return None, messy_latex
+
     if _looks_like_html(t):
         plain = _strip_html(t)
-        p, l = _sympy_try(plain)
-        return (p or None, l)
+        latex = _extract_latex_from_html(t)
+        if latex and _is_complex_latex(latex):
+            return None, _maybe_katex_from_latex(latex)
+        p, l = _sympy_try(plain or latex or "")
+        return (p or None, l or (_maybe_katex_from_latex(latex) if latex else None))
+    if "\\" in t or "$" in t:
+        m = re.search(r"\$([^$]+)\$", t)
+        if m:
+            k = _maybe_katex_from_latex(m.group(1))
+            if k:
+                return None, k
+        k = _maybe_katex_from_latex(t.strip("$ "))
+        if k:
+            return None, k
     cleaned = _heuristic_clean(t)
     frag = _best_math_fragment(cleaned)
     p, l = _sympy_try(frag)

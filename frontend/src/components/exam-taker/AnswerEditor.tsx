@@ -25,6 +25,7 @@ import { FormulaInserter } from '../exam-builder/tools/FormulaInserter';
 import { useEditorLatexCompletion } from '@/hooks/useEditorLatexCompletion';
 import { EditorLatexCompletionsList } from '@/components/ui/latex-autocomplete';
 import { cn } from '@/lib/utils';
+import { resolveEditorContent } from '@/lib/plainTextWithMathToDoc';
 
 interface AnswerEditorProps {
   questionNumber: number;
@@ -141,12 +142,29 @@ export function AnswerEditor({
 
   useEffect(() => {
     if (!editor) return;
-    const current = editor.getHTML();
-    const next = answer || '';
-    if (current !== next) {
-      editor.commands.setContent(next, { emitUpdate: false });
+    const raw = answer || '';
+    if (raw.trimStart().startsWith('<')) {
+      const current = editor.getHTML();
+      if (current !== raw) {
+        editor.commands.setContent(raw, { emitUpdate: false });
+        queueMicrotask(() => migrateMathStrings(editor));
+      }
+      return;
     }
-  }, [answer, questionNumber, editor]);
+    if (!raw.trim()) {
+      const current = editor.getHTML().replace(/<p><\/p>/g, '').trim();
+      if (current) editor.commands.setContent('', { emitUpdate: false });
+      return;
+    }
+
+    const resolved = resolveEditorContent(raw);
+    editor.commands.setContent(resolved, { emitUpdate: false });
+    queueMicrotask(() => {
+      migrateMathStrings(editor);
+      const html = editor.getHTML();
+      if (html && html !== raw) onUpdate(html);
+    });
+  }, [answer, questionNumber, editor, onUpdate]);
 
   const insertFormula = useCallback((latex: string, displayMode: boolean) => {
     if (!editor) return;

@@ -97,6 +97,7 @@ export default function CreateExam() {
   const [isUploading, setIsUploading] = useState(false);
   const [dueDate, setDueDate] = useState<string>('');
   const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>('build');
+  const [initialExpandedQuestionIds, setInitialExpandedQuestionIds] = useState<string[]>([]);
 
   // Fetch courses
   const { data: courses = [], isLoading: coursesLoading, error: coursesError } = useQuery({
@@ -132,16 +133,17 @@ export default function CreateExam() {
 
   // Transform API question format to Question format
   const transformApiQuestionToQuestion = (apiQ: any, number: number, parentId?: string): Question => {
+    const subQuestions = (apiQ.subQuestions || []).map((sub: any, idx: number) =>
+      transformApiQuestionToQuestion(sub, sub.number ?? idx + 1, apiQ.id)
+    );
     return {
       id: apiQ.id || crypto.randomUUID(),
       number: number,
       text: apiQ.text || '',
       richContent: apiQ.richContent || null,
-      questionType: apiQ.questionType || 'standard',
+      questionType: subQuestions.length > 0 ? 'multi-part' : (apiQ.questionType || 'standard'),
       points: apiQ.points || 10,
-      subQuestions: (apiQ.subQuestions || []).map((sub: any, idx: number) =>
-        transformApiQuestionToQuestion(sub, sub.number ?? idx + 1, apiQ.id)
-      ),
+      subQuestions,
       attachments: apiQ.attachments || [],
       embeddedContent: apiQ.embeddedContent || [],
       theories: apiQ.theories || [],
@@ -175,6 +177,19 @@ export default function CreateExam() {
         transformApiQuestionToQuestion(q, q.number ?? idx + 1)
       );
       setQuestions(transformedQuestions);
+      const expandWithSubs: string[] = [];
+      const collectExpand = (qs: Question[]) => {
+        for (const q of qs) {
+          if (q.subQuestions?.length) {
+            expandWithSubs.push(q.id);
+            collectExpand(q.subQuestions);
+          }
+        }
+      };
+      collectExpand(transformedQuestions);
+      if (expandWithSubs.length > 0) {
+        setInitialExpandedQuestionIds(expandWithSubs);
+      }
       setDueDate(isoToDatetimeLocal(examData.dueDate));
       setIsLoading(false);
     }
@@ -205,7 +220,11 @@ export default function CreateExam() {
 
       const result = await examsAPI.upload(formData);
       toast.success(`Exam uploaded successfully! ${result.questions_found} questions found.`);
-      navigate('/exams');
+      if (result.exam_id) {
+        navigate(`/exams/${result.exam_id}/edit`);
+      } else {
+        navigate('/exams');
+      }
     } catch (error: any) {
       toast.error(error.message || 'Failed to upload exam');
     } finally {
@@ -688,7 +707,12 @@ export default function CreateExam() {
                   </p>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <QuestionBuilder questions={questions} onQuestionsChange={setQuestions} enableInlinePreview={false} />
+                  <QuestionBuilder
+                    questions={questions}
+                    onQuestionsChange={setQuestions}
+                    enableInlinePreview={false}
+                    initialExpandedIds={initialExpandedQuestionIds}
+                  />
                 </div>
               </div>
             )}

@@ -464,6 +464,7 @@ class StepResultResponse(BaseModel):
     expected: Optional[str] = None
     received: Optional[str] = None
     expectedDisplay: Optional[str] = None
+    expectedMathLatex: Optional[str] = None
     receivedDisplay: Optional[str] = None
     receivedMathLatex: Optional[str] = None
     
@@ -495,6 +496,9 @@ class GradingResultResponse(BaseModel):
 class SubmittedAnswerResponse(BaseModel):
     questionId: str
     questionNumber: int
+    parentQuestionId: Optional[str] = None
+    outlineTitle: Optional[str] = None
+    displayLabel: Optional[str] = None
     extractedText: Optional[str] = None
     extractedLatex: Optional[str] = None
     extractedTextDisplay: Optional[str] = None

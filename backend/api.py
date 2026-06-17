@@ -250,7 +250,21 @@ def _submission_total_score_for_api(
     """Hide total score from students until grades are approved and released."""
     if viewer.role == models.UserRole.STUDENT and not include_grading:
         return None
-    return submission.total_score
+    if submission.total_score is not None:
+        return submission.total_score
+    if submission.grading_results:
+        return round(sum(float(gr.score or 0) for gr in submission.grading_results), 2)
+    return None
+
+
+def _recompute_submission_total_score(db: Session, submission_id: str) -> float:
+    """Sum persisted per-question scores (source of truth after auto-grade)."""
+    rows = (
+        db.query(models.GradingResult)
+        .filter(models.GradingResult.submission_id == submission_id)
+        .all()
+    )
+    return round(sum(float(r.score or 0) for r in rows), 2)
 
 
 def _step_result_max_score(evaluation: Any, gold_steps: List[GraderStep], step_number: int) -> int:
@@ -357,10 +371,12 @@ async def _read_upload_file_as_text(file: UploadFile) -> str:
         return file_content.decode("utf-8", errors="replace")
 
     if file_ext in [".jpg", ".jpeg", ".png", ".pdf"]:
+        from ocr.text_rich_content import normalize_exam_ocr_text
+
         ocr_result = ocr_processor.extract_steps_from_file(
             file_content, file.filename or "upload"
         )
-        text = ocr_result.combined_text
+        text = normalize_exam_ocr_text(ocr_result.combined_text or "")
         if not text:
             raise HTTPException(
                 status_code=400,
@@ -2201,7 +2217,13 @@ async def upload_exam(
             raise HTTPException(status_code=400, detail="Unsupported file format. Use .txt, .jpg, .png, or .pdf")
 
         parser = ExamParser()
+        from ocr.text_rich_content import normalize_exam_ocr_text, looks_like_math_ocr
+
+        text = normalize_exam_ocr_text(text or "")
         parsed_exam = parser.parse_exam(text)
+
+        if looks_like_math_ocr(parsed_exam.get("title") or ""):
+            parsed_exam["title"] = "Imported Exam"
 
         # Extract diagrams from PDF using pdfplumber + pdf2image now that we
         # know which questions are on which pages (and can find "Gold Solution:" positions)
@@ -2212,12 +2234,34 @@ async def upload_exam(
             except Exception as _de:
                 logger.warning(f"Diagram extraction failed: {_de}")
 
-        # Handwritten/scanned PDFs: attach rendered page images so diagrams & graphs
-        # are preserved even when pdfplumber finds no embedded raster objects.
+        # Handwritten/scanned PDFs: only render page images when a question actually
+        # references a diagram (never attach the whole scan as a fake "diagram").
+        def _parsed_tree_needs_diagram(qlist: list) -> bool:
+            def _walk(qd: dict) -> bool:
+                blob = (qd.get("text") or "").lower()
+                if any(kw in blob for kw in _DIAGRAM_KW_EARLY):
+                    return True
+                return any(_walk(s) for s in qd.get("sub_questions") or [])
+
+            return any(_walk(q) for q in qlist)
+
+        _DIAGRAM_KW_EARLY = {
+            'diagram', 'graph', 'figure', 'plot', 'sketch',
+            'illustration', 'flow chart', 'flowchart', 'flow chart below',
+            'the diagram', 'study it and answer',
+            'chart below', 'graph below', 'figure below', 'diagram below',
+            'reaction scheme', 'scheme below', 'deduce the structures',
+            'mass spectrum', 'relative intensity', 'm/z',
+            'match column', 'column a', 'table below',
+            'find the area', 'find area', 'perimeter',
+            'name of this figure', 'name of the figure', 'name of figure',
+        }
+
         if (
             _raw_pdf_bytes
             and parsed_exam.get('questions')
             and ocr_processor.upload_needs_ocr(_raw_pdf_bytes, file.filename or "upload.pdf")
+            and _parsed_tree_needs_diagram(parsed_exam['questions'])
         ):
             try:
                 import io as _io
@@ -2304,11 +2348,14 @@ async def upload_exam(
             outline_level: int = 1,
             q_idx: int = 0,
         ) -> None:
-            from ocr.text_rich_content import ocr_text_to_rich_content
+            from ocr.text_rich_content import normalize_exam_ocr_text, ocr_text_to_rich_content
 
-            q_text = _normalize_text_for_storage(question_data.get("text") or "")
+            raw_text = question_data.get("text") or ""
+            q_text = _normalize_text_for_storage(normalize_exam_ocr_text(raw_text))
             q_rich = ocr_text_to_rich_content(q_text) if q_text.strip() else None
             label = (question_data.get("label") or "").strip()
+            sub_list = question_data.get("sub_questions") or []
+            q_type = "multi-part" if sub_list else "standard"
             new_question = models.Question(
                 exam_id=new_exam.id,
                 number=question_data["number"],
@@ -2318,22 +2365,14 @@ async def upload_exam(
                 outline_level=outline_level,
                 outline_title=label or None,
                 parent_question_id=parent_id,
+                question_type=q_type,
             )
             db.add(new_question)
             db.flush()
 
             if parent_id is None:
                 q_page_num = question_data.get("page_num", q_idx)
-                is_scanned = (
-                    _raw_pdf_bytes is not None
-                    and ocr_processor.upload_needs_ocr(
-                        _raw_pdf_bytes, file.filename or "upload.pdf"
-                    )
-                )
-                wants_diagram = _question_needs_diagram(question_data) or (
-                    is_scanned and bool(question_data.get("sub_questions"))
-                )
-                if q_page_num in pdf_embedded_images and wants_diagram:
+                if q_page_num in pdf_embedded_images and _question_needs_diagram(question_data):
                     import io as _io
                     from PIL import Image as _PILImg
 
@@ -2364,12 +2403,15 @@ async def upload_exam(
                             )
 
             for step_data in question_data.get("gold_solution_steps") or []:
+                expr = _normalize_text_for_storage(
+                    normalize_exam_ocr_text(step_data.get("expression") or "")
+                )
                 db.add(
                     models.GoldSolutionStep(
                         question_id=new_question.id,
                         step_number=step_data["step_number"],
                         description=step_data["description"],
-                        expression=step_data["expression"],
+                        expression=expr,
                         points=step_data["points"],
                         required=step_data["required"],
                     )
@@ -2980,15 +3022,13 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
     if not html_content or not html_content.strip():
         return '', None
     
-    # Extract LaTeX from math nodes (if present)
-    # TipTap Mathematics: data-type="inline-math" or "block-math", LaTeX in data-latex attribute
+    raw = unescape(html_content)
     latex_content = None
     all_latex = []
-    # data-latex="..." (TipTap and similar)
-    for attr_match in re.finditer(r'data-latex="([^"]*)"', html_content):
-        if attr_match.group(1).strip():
-            all_latex.append(attr_match.group(1).strip())
-    # Legacy / markdown-style patterns
+    for attr_match in re.finditer(r'data-latex=(["\'])(.*?)\1', raw, re.DOTALL):
+        chunk = unescape(attr_match.group(2)).strip()
+        if chunk:
+            all_latex.append(chunk)
     latex_patterns = [
         r'<span[^>]*data-type="(?:inline-)?math"[^>]*>(.*?)</span>',
         r'<div[^>]*data-type="block-math"[^>]*>(.*?)</div>',
@@ -2999,28 +3039,80 @@ def extract_math_from_html(html_content: str) -> Tuple[str, Optional[str]]:
         r'\\\((.*?)\\\)',
     ]
     for pattern in latex_patterns:
-        matches = re.findall(pattern, html_content, re.DOTALL)
+        matches = re.findall(pattern, raw, re.DOTALL)
         if matches:
-            all_latex.extend([m.strip() for m in matches if m and m.strip()])
+            all_latex.extend([unescape(m.strip()) for m in matches if m and m.strip()])
     
     if all_latex:
-        # Newlines keep separate math fields as separate lines so
-        # parse_answer_into_steps can treat each TipTap math node as its own step.
         latex_content = "\n".join([m.strip() for m in all_latex if m.strip()])
     
-    # Extract plain text content (strip HTML tags)
-    text_content = re.sub(r'<[^>]+>', '', html_content)
+    text_content = re.sub(r'<[^>]+>', '', raw)
     text_content = unescape(text_content).strip()
     
-    # Remove placeholder text
     if text_content.lower() in ['type your answer here...', '']:
         text_content = ''
     
-    # If we have LaTeX but no text, use LaTeX as text (it will be parsed)
     if not text_content and latex_content:
         text_content = latex_content
     
     return text_content, latex_content
+
+
+def _submission_answer_meta(
+    question: Optional[models.Question],
+    questions_by_id: dict,
+) -> dict:
+    """Labels for sub-question answers in submission review UI."""
+    if not question:
+        return {
+            "parentQuestionId": None,
+            "outlineTitle": None,
+            "displayLabel": None,
+        }
+    pid = getattr(question, "parent_question_id", None)
+    outline = getattr(question, "outline_title", None)
+    if pid:
+        parent = questions_by_id.get(pid)
+        pnum = parent.number if parent else "?"
+        part = (outline or "").strip() or f"({question.number})"
+        return {
+            "parentQuestionId": pid,
+            "outlineTitle": outline,
+            "displayLabel": f"Q{pnum} · {part}",
+        }
+    return {
+        "parentQuestionId": None,
+        "outlineTitle": outline,
+        "displayLabel": f"Q{question.number}",
+    }
+
+
+def _submitted_answer_response(
+    *,
+    question_id: str,
+    question_number: int,
+    questions_by_id: dict,
+    extracted_text: Optional[str],
+    extracted_latex: Optional[str],
+    grading_result: Optional[schemas.GradingResultResponse],
+) -> schemas.SubmittedAnswerResponse:
+    question = questions_by_id.get(question_id)
+    meta = _submission_answer_meta(question, questions_by_id)
+    disp_plain, disp_latex = _polish_submission_answer_fields(extracted_text, extracted_latex)
+    qnum = int(question.number) if question else int(question_number or 0)
+    return schemas.SubmittedAnswerResponse(
+        questionId=str(question_id),
+        questionNumber=qnum,
+        parentQuestionId=meta["parentQuestionId"],
+        outlineTitle=meta["outlineTitle"],
+        displayLabel=meta["displayLabel"],
+        extractedText=extracted_text,
+        extractedLatex=extracted_latex,
+        extractedTextDisplay=disp_plain,
+        extractedMathLatex=disp_latex,
+        extractedSteps=[],
+        gradingResult=grading_result,
+    )
 
 
 def _typed_answer_for_api_display(typed_answer: str) -> Tuple[str, Optional[str]]:
@@ -3058,7 +3150,7 @@ def _step_result_response_for_api(step) -> schemas.StepResultResponse:
     from ocr.ocr_transcript_polish import polish_step_snippet
 
     rd, rml = polish_step_snippet(step.received)
-    ed, _ = polish_step_snippet(step.expected)
+    ed, ed_latex = polish_step_snippet(step.expected)
     return schemas.StepResultResponse(
         id=step.id,
         stepNumber=step.step_number,
@@ -3069,6 +3161,7 @@ def _step_result_response_for_api(step) -> schemas.StepResultResponse:
         expected=step.expected,
         received=step.received,
         expectedDisplay=ed,
+        expectedMathLatex=ed_latex,
         receivedDisplay=rd,
         receivedMathLatex=rml,
     )
@@ -3120,19 +3213,15 @@ def _merge_typed_answers_into_responses(
 
         display, latex_vis = _typed_answer_for_api_display(str(typed_answer))
 
-        disp_plain, disp_latex = _polish_submission_answer_fields(display, latex_vis)
-
         if question:
             answers.append(
-                schemas.SubmittedAnswerResponse(
-                    questionId=str(question_id or question.id),
-                    questionNumber=int(question_number if question_number is not None else question.number),
-                    extractedText=display,
-                    extractedLatex=latex_vis,
-                    extractedTextDisplay=disp_plain,
-                    extractedMathLatex=disp_latex,
-                    extractedSteps=[],
-                    gradingResult=None,
+                _submitted_answer_response(
+                    question_id=str(question_id or question.id),
+                    question_number=int(question_number if question_number is not None else question.number),
+                    questions_by_id=questions_by_id,
+                    extracted_text=display,
+                    extracted_latex=latex_vis,
+                    grading_result=None,
                 )
             )
         else:
@@ -3142,15 +3231,13 @@ def _merge_typed_answers_into_responses(
             except (TypeError, ValueError):
                 qnum = 0
             answers.append(
-                schemas.SubmittedAnswerResponse(
-                    questionId=str(question_id or "unknown"),
-                    questionNumber=qnum,
-                    extractedText=display,
-                    extractedLatex=latex_vis,
-                    extractedTextDisplay=disp_plain,
-                    extractedMathLatex=disp_latex,
-                    extractedSteps=[],
-                    gradingResult=None,
+                _submitted_answer_response(
+                    question_id=str(question_id or "unknown"),
+                    question_number=qnum,
+                    questions_by_id=questions_by_id,
+                    extracted_text=display,
+                    extracted_latex=latex_vis,
+                    grading_result=None,
                 )
             )
 
@@ -3319,6 +3406,18 @@ def parse_answer_into_steps(answer_text: str) -> List[str]:
             out = [s.strip() for s in numbered_paren if s.strip()]
             if out:
                 return out
+
+        # 1a2) Prose rubric phrases common in OCR (Factor… Set each factor… Solve for…)
+        prose_split = re.compile(
+            r"\s+(?=(?:Step\s*\d+\s*:?\s*"
+            r"|Factor(?:ing)?(?:\s+the(?:\s+quadratic)?)?\s*"
+            r"|(?i:Set each factor)\b\s*"
+            r"|(?i:Solve(?:\s+for\s+\w+)?)\s*:?\s*"
+            r"|Therefore\b|Thus\b|Hence\b|(?i:Substitute(?:\s+into)?)\b\s*))"
+        )
+        prose_parts = [p.strip() for p in prose_split.split(single_line) if p.strip()]
+        if len(prose_parts) >= 2:
+            return prose_parts
 
         # 1b) LaTeX / algebra one line: split before "\\frac", "\\lim", etc. When the
         # line has backslashes, ONLY split at "\\command" boundaries — otherwise a
@@ -3802,6 +3901,93 @@ def _try_split_answer_pdf_across_questions(
         chunks = [_strip_scan_app_watermarks(c or "") for c in chunks]
         return chunks, method
     return None, ""
+
+
+def _part_to_tiptap_math_html(part: str) -> str:
+    """Plain or LaTeX chunk → minimal TipTap HTML for storage."""
+    from html import escape
+
+    p = (part or "").strip()
+    if not p:
+        return ""
+    if p.startswith("<"):
+        return p
+    if "\\" in p or "^" in p or "frac" in p or "sqrt" in p:
+        return f'<div data-latex="{escape(p)}" data-type="block-math"></div>'
+    return _plain_chunk_to_tiptap_html(p)
+
+
+def _fan_out_multipart_typed_rows(
+    answers_list: List[dict],
+    exam: models.Exam,
+) -> List[dict]:
+    """
+    When a single typed row for a multi-part question contains (a)...(b)...,
+    split it onto sub-question IDs so grading aligns with rubric parts.
+    """
+    if not answers_list:
+        return answers_list
+    questions = list(exam.questions)
+    by_id = {q.id: q for q in questions}
+    subs_by_parent: Dict[str, List[models.Question]] = {}
+    for q in questions:
+        pid = getattr(q, "parent_question_id", None)
+        if pid:
+            subs_by_parent.setdefault(pid, []).append(q)
+    for pid in subs_by_parent:
+        subs_by_parent[pid].sort(key=lambda q: q.number)
+
+    out: List[dict] = []
+    consumed_qids: set = set()
+
+    for entry in answers_list:
+        qid = str(entry.get("questionId") or "")
+        html = str(entry.get("typedAnswer") or "")
+        if not html.strip():
+            out.append(entry)
+            continue
+        if qid in consumed_qids:
+            continue
+        q = by_id.get(qid)
+        parent_id = None
+        if q:
+            parent_id = q.parent_question_id or (
+                q.id if subs_by_parent.get(q.id) else None
+            )
+        subs = subs_by_parent.get(parent_id or "", [])
+        if len(subs) <= 1:
+            out.append(entry)
+            continue
+
+        plain, latex = extract_math_from_html(html)
+        source = (latex or plain or "").strip()
+        if not source:
+            out.append(entry)
+            continue
+        parts = _split_multipart_page_text(source, len(subs))
+        if sum(1 for p in parts if (p or "").strip()) < 2:
+            out.append(entry)
+            continue
+
+        for sub_q, part in zip(subs, parts):
+            part = (part or "").strip()
+            if not part:
+                continue
+            out.append(
+                {
+                    "questionId": sub_q.id,
+                    "questionNumber": sub_q.number,
+                    "typedAnswer": _part_to_tiptap_math_html(part),
+                }
+            )
+        consumed_qids.add(qid)
+        if qid not in {s.id for s in subs}:
+            consumed_qids.add(qid)
+        else:
+            for s in subs:
+                consumed_qids.add(s.id)
+
+    return out if out else answers_list
 
 
 def _append_typed_for_question(
@@ -4613,6 +4799,127 @@ def _gold_steps_for_question(question: models.Question) -> List[GraderStep]:
     return gold_steps
 
 
+def _extract_typed_answer_for_grading(typed_answer: str) -> Tuple[str, Optional[str]]:
+    """
+    Extract gradeable text from stored TipTap/HTML answers.
+    Uses the same fallback as API display so OCR segments are not skipped.
+    """
+    text, latex = _typed_answer_for_api_display(str(typed_answer or ""))
+    plain = (text or "").strip()
+    latex_out = (latex or "").strip() or None
+    return plain, latex_out
+
+
+def _align_evaluations_to_gold_steps(
+    grading_result: dict,
+    gold_steps: List[GraderStep],
+    student_steps: List[str],
+) -> Tuple[List[Any], List[str]]:
+    """
+    One evaluation row per gold rubric step so the UI aligns reference steps
+    with AI grading (handles single-block OCR answers).
+    """
+    from math_grader import StepEvaluation, StepStatus
+
+    evaluations = grading_result.get("evaluations") or []
+    steps_for_storage = grading_result.get("student_steps_for_storage") or student_steps
+    strategies = grading_result.get("strategies_used") or []
+
+    if (
+        len(evaluations) == len(gold_steps)
+        and strategies
+        and strategies[0] == "prose_rubric"
+    ):
+        received = [
+            steps_for_storage[i] if i < len(steps_for_storage) else "—"
+            for i in range(len(gold_steps))
+        ]
+        return evaluations, received
+
+    gold_to_match: Dict[int, Tuple[Any, str]] = {}
+    for i, ev in enumerate(evaluations):
+        gj = getattr(ev, "matched_gold_step", None)
+        if gj is None or not (0 <= gj < len(gold_steps)):
+            continue
+        stu_text = (
+            steps_for_storage[i]
+            if i < len(steps_for_storage)
+            else (student_steps[i] if i < len(student_steps) else "")
+        )
+        prev = gold_to_match.get(gj)
+        if prev is None or ev.points_earned > prev[0].points_earned:
+            gold_to_match[gj] = (ev, stu_text)
+
+    aligned_evals: List[Any] = []
+    aligned_received: List[str] = []
+    for j, gold in enumerate(gold_steps):
+        if j in gold_to_match:
+            ev, stu_text = gold_to_match[j]
+            aligned_evals.append(ev)
+            aligned_received.append(stu_text or "—")
+        else:
+            aligned_evals.append(
+                StepEvaluation(
+                    StepStatus.INCORRECT,
+                    0.0,
+                    "No student step matched this rubric item",
+                    matched_gold_step=j,
+                )
+            )
+            aligned_received.append("—")
+
+    return aligned_evals, aligned_received
+
+
+def _grade_one_typed_answer_payload(
+    db: Session,
+    submission: models.Submission,
+    questions: List[models.Question],
+    answer_data: dict,
+    graded_question_ids: set,
+    feedback_prefix: str = "Auto-graded",
+) -> float:
+    """Grade a single typed-answer JSON row if not already graded."""
+    typed_answer = answer_data.get("typedAnswer", "")
+    if typed_answer is None or not str(typed_answer).strip():
+        return 0.0
+
+    question = _resolve_exam_question_for_answer(
+        questions,
+        answer_data.get("questionId"),
+        answer_data.get("questionNumber"),
+    )
+    if not question:
+        logger.warning(
+            "Skipping typed answer — question not found (id=%s number=%s)",
+            answer_data.get("questionId"),
+            answer_data.get("questionNumber"),
+        )
+        return 0.0
+    if question.id in graded_question_ids:
+        return 0.0
+
+    text_content, latex_content = _extract_typed_answer_for_grading(str(typed_answer))
+    if not text_content and not latex_content:
+        return 0.0
+
+    answer_to_grade = latex_content if latex_content else text_content
+    student_steps = parse_answer_into_steps(answer_to_grade)
+    if not student_steps:
+        student_steps = [answer_to_grade.strip()]
+
+    return _grade_student_work_for_question(
+        db,
+        submission,
+        question,
+        student_steps,
+        text_content,
+        latex_content,
+        feedback_prefix,
+        graded_question_ids,
+    )
+
+
 def _store_grading_result_rows(
     db: Session,
     submission_id: str,
@@ -4624,37 +4931,47 @@ def _store_grading_result_rows(
     extracted_latex: Optional[str],
     feedback_prefix: str,
 ) -> None:
-    steps_for_results = grading_result.get("student_steps_for_storage") or student_steps
+    aligned_evals, aligned_received = _align_evaluations_to_gold_steps(
+        grading_result, gold_steps, student_steps
+    )
+    aligned_total = round(
+        sum(float(getattr(ev, "points_earned", 0) or 0) for ev in aligned_evals),
+        2,
+    )
+    max_score = float(grading_result.get("max_score") or sum(g.points for g in gold_steps))
+    percentage = (aligned_total / max_score * 100) if max_score > 0 else 0.0
+
     db_grading_result = models.GradingResult(
         submission_id=submission_id,
         question_id=question.id,
         extracted_text=extracted_text or None,
         extracted_latex=extracted_latex,
-        score=grading_result["total_score"],
-        max_score=grading_result["max_score"],
-        feedback=f"{feedback_prefix}: {grading_result['percentage']:.1f}%",
-        is_correct=grading_result["percentage"] >= 70,
+        score=aligned_total,
+        max_score=max_score,
+        feedback=f"{feedback_prefix}: {percentage:.1f}%",
+        is_correct=percentage >= 70,
     )
     db.add(db_grading_result)
     db.flush()
 
-    for idx, (student_step, evaluation) in enumerate(
-        zip(steps_for_results, grading_result["evaluations"]), start=1
+    for idx, (received_text, evaluation) in enumerate(
+        zip(aligned_received, aligned_evals), start=1
     ):
         matched_gold = None
         if evaluation.matched_gold_step is not None:
             matched_gold = gold_steps[evaluation.matched_gold_step].content
+        display_received = received_text if received_text and received_text != "—" else ""
         db.add(
             models.StepResult(
                 grading_result_id=db_grading_result.id,
                 step_number=idx,
-                student_text=student_step,
+                student_text=display_received,
                 is_correct=evaluation.status.value == "Correct",
                 score=evaluation.points_earned,
                 max_score=_step_result_max_score(evaluation, gold_steps, idx),
                 feedback=evaluation.feedback,
                 expected=matched_gold,
-                received=student_step,
+                received=display_received or received_text,
             )
         )
 
@@ -4873,47 +5190,24 @@ async def grade_submission_automatically(submission_id: str, db: Session):
     if has_typed_answers:
         try:
             typed_answers_data = json.loads(submission.typed_answers)
-            
-            for answer_data in typed_answers_data:
-                question_id = answer_data.get('questionId')
-                question_number = answer_data.get('questionNumber')
-                typed_answer = answer_data.get('typedAnswer', '')
-                
-                if not typed_answer or typed_answer.strip() == '':
-                    continue
-                
-                # Find the corresponding question
-                question = _resolve_exam_question_for_answer(
-                    questions, question_id, question_number
+            if isinstance(typed_answers_data, list):
+                typed_answers_data = _expand_monolithic_typed_payload(
+                    typed_answers_data, exam
                 )
-                if not question:
-                    continue
-                
-                # Extract math content from HTML
-                text_content, latex_content = extract_math_from_html(typed_answer)
-                
-                if not text_content and not latex_content:
-                    continue
-                
-                # Use LaTeX if available, otherwise use text
-                answer_to_grade = latex_content if latex_content else text_content
-                
-                # Parse answer into steps
-                student_steps = parse_answer_into_steps(answer_to_grade)
-                
-                if not student_steps:
-                    continue
-                total_score += _grade_student_work_for_question(
-                    db,
-                    submission,
-                    question,
-                    student_steps,
-                    text_content,
-                    latex_content,
-                    "Auto-graded",
-                    graded_question_ids,
+                typed_answers_data = _fan_out_multipart_typed_rows(
+                    typed_answers_data, exam
                 )
-                
+                for answer_data in typed_answers_data:
+                    if not isinstance(answer_data, dict):
+                        continue
+                    total_score += _grade_one_typed_answer_payload(
+                        db,
+                        submission,
+                        questions,
+                        answer_data,
+                        graded_question_ids,
+                        "Auto-graded",
+                    )
         except Exception as e:
             logger.exception("Error grading typed answers: %s", e)
 
@@ -4974,7 +5268,33 @@ async def grade_submission_automatically(submission_id: str, db: Session):
             except Exception as e:
                 logger.exception("Error grading image %s: %s", image_record.image_path, e)
 
+    # Grade any typed rows still missing after the image pass (e.g. OCR-only transcripts)
+    if has_typed_answers:
+        try:
+            typed_answers_data = json.loads(submission.typed_answers)
+            if isinstance(typed_answers_data, list):
+                typed_answers_data = _expand_monolithic_typed_payload(
+                    typed_answers_data, exam
+                )
+                typed_answers_data = _fan_out_multipart_typed_rows(
+                    typed_answers_data, exam
+                )
+                for answer_data in typed_answers_data:
+                    if not isinstance(answer_data, dict):
+                        continue
+                    total_score += _grade_one_typed_answer_payload(
+                        db,
+                        submission,
+                        questions,
+                        answer_data,
+                        graded_question_ids,
+                        "Auto-graded (handwriting)",
+                    )
+        except Exception as e:
+            logger.exception("Error in typed-answer reconciliation pass: %s", e)
+
     db.flush()
+    total_score = _recompute_submission_total_score(db, submission.id)
     graded_rows = (
         db.query(models.GradingResult)
         .filter(models.GradingResult.submission_id == submission.id)
@@ -5084,6 +5404,7 @@ async def submit_exam(
             import json as _json
             existing = _json.loads(answers)
             existing = _expand_monolithic_typed_payload(existing, exam)
+            existing = _fan_out_multipart_typed_rows(existing, exam)
             # Existing typed answers take precedence (student typed them manually)
             existing_qids = {a.get('questionId') for a in existing}
             for ea in extra_typed_answers:
@@ -5198,7 +5519,15 @@ def get_submissions(
     if status:
         query = query.filter(models.Submission.status == status)
     
-    submissions = query.order_by(models.Submission.submitted_at.desc()).all()
+    submissions = (
+        query.options(
+            selectinload(models.Submission.grading_results).selectinload(
+                models.GradingResult.step_results
+            )
+        )
+        .order_by(models.Submission.submitted_at.desc())
+        .all()
+    )
     
     result = []
     import json
@@ -5224,28 +5553,23 @@ def get_submissions(
             step_results = [_step_result_response_for_api(step) for step in grading_result.step_results]
 
             question = questions_by_id.get(grading_result.question_id)
-            disp_plain, disp_latex = _polish_submission_answer_fields(
-                grading_result.extracted_text,
-                grading_result.extracted_latex,
-            )
+            gr = schemas.GradingResultResponse(
+                id=grading_result.id,
+                score=grading_result.score,
+                maxScore=grading_result.max_score,
+                feedback=grading_result.feedback or "",
+                stepResults=step_results,
+                isCorrect=grading_result.is_correct
+            ) if _show_grading else None
 
             answers.append(
-                schemas.SubmittedAnswerResponse(
-                    questionId=grading_result.question_id,
-                    questionNumber=question.number if question else 0,
-                    extractedText=grading_result.extracted_text,
-                    extractedLatex=grading_result.extracted_latex,
-                    extractedTextDisplay=disp_plain,
-                    extractedMathLatex=disp_latex,
-                    extractedSteps=[],
-                    gradingResult=schemas.GradingResultResponse(
-                        id=grading_result.id,
-                        score=grading_result.score,
-                        maxScore=grading_result.max_score,
-                        feedback=grading_result.feedback or "",
-                        stepResults=step_results,
-                        isCorrect=grading_result.is_correct
-                    ) if _show_grading else None
+                _submitted_answer_response(
+                    question_id=grading_result.question_id,
+                    question_number=question.number if question else 0,
+                    questions_by_id=questions_by_id,
+                    extracted_text=grading_result.extracted_text,
+                    extracted_latex=grading_result.extracted_latex,
+                    grading_result=gr,
                 )
             )
         
@@ -5277,9 +5601,16 @@ def get_submission(
     db: Session = Depends(get_db)
 ):
     """Get a specific submission by ID"""
-    submission = db.query(models.Submission).filter(
-        models.Submission.id == submission_id
-    ).first()
+    submission = (
+        db.query(models.Submission)
+        .options(
+            selectinload(models.Submission.grading_results).selectinload(
+                models.GradingResult.step_results
+            )
+        )
+        .filter(models.Submission.id == submission_id)
+        .first()
+    )
     
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
@@ -5307,28 +5638,23 @@ def get_submission(
         step_results = [_step_result_response_for_api(step) for step in grading_result.step_results]
 
         question = questions_by_id.get(grading_result.question_id)
-        disp_plain, disp_latex = _polish_submission_answer_fields(
-            grading_result.extracted_text,
-            grading_result.extracted_latex,
-        )
+        gr = schemas.GradingResultResponse(
+            id=grading_result.id,
+            score=grading_result.score,
+            maxScore=grading_result.max_score,
+            feedback=grading_result.feedback or "",
+            stepResults=step_results,
+            isCorrect=grading_result.is_correct
+        ) if _show_grading else None
 
         answers.append(
-            schemas.SubmittedAnswerResponse(
-                questionId=grading_result.question_id,
-                questionNumber=question.number if question else 0,
-                extractedText=grading_result.extracted_text,
-                extractedLatex=grading_result.extracted_latex,
-                extractedTextDisplay=disp_plain,
-                extractedMathLatex=disp_latex,
-                extractedSteps=[],
-                gradingResult=schemas.GradingResultResponse(
-                    id=grading_result.id,
-                    score=grading_result.score,
-                    maxScore=grading_result.max_score,
-                    feedback=grading_result.feedback or "",
-                    stepResults=step_results,
-                    isCorrect=grading_result.is_correct
-                ) if _show_grading else None
+            _submitted_answer_response(
+                question_id=grading_result.question_id,
+                question_number=question.number if question else 0,
+                questions_by_id=questions_by_id,
+                extracted_text=grading_result.extracted_text,
+                extracted_latex=grading_result.extracted_latex,
+                grading_result=gr,
             )
         )
     
@@ -5628,8 +5954,6 @@ async def adjust_grades(
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     
-    total_score = 0
-    
     for adj in adjustments.adjustments:
         grading_result = db.query(models.GradingResult).filter(
             models.GradingResult.id == adj.gradingResultId
@@ -5654,17 +5978,15 @@ async def adjust_grades(
                         step_result.score = step_adj.score
                     if step_adj.feedback:
                         step_result.feedback = step_adj.feedback
-        
-        total_score += grading_result.score
     
-    submission.total_score = total_score
+    submission.total_score = _recompute_submission_total_score(db, submission_id)
     submission.status = models.SubmissionStatus.AWAITING_APPROVAL
     db.commit()
     
     return {
         "status": "success",
         "message": "Grades adjusted successfully",
-        "totalScore": total_score
+        "totalScore": submission.total_score
     }
 
 

@@ -43,11 +43,12 @@ interface QuestionEditorProps {
   question: Question;
   onUpdate: (question: Question) => void;
   onAddSubQuestion: () => void;
+  onSelectSubQuestion?: (subQuestionId: string) => void;
 }
 
 type EditingMath = { pos: number; latex: string; block: boolean };
 
-export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: QuestionEditorProps) {
+export function QuestionEditor({ question, onUpdate, onAddSubQuestion, onSelectSubQuestion }: QuestionEditorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const [editingMath, setEditingMath] = useState<EditingMath | null>(null);
   const onMathClickRef = useRef<(pos: number, latex: string, block: boolean) => void>(() => {});
@@ -224,6 +225,32 @@ export function QuestionEditor({ question, onUpdate, onAddSubQuestion }: Questio
               </span>
             </p>
           </div>
+          {question.subQuestions.length > 0 && (
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+              <Label className="text-sm">Sub-questions ({question.subQuestions.length})</Label>
+              <p className="text-xs text-muted-foreground">
+                Multi-part question — select a part below or from the outline to edit its text and golden answers.
+              </p>
+              <div className="flex flex-col gap-2">
+                {question.subQuestions.map((sub) => (
+                  <Button
+                    key={sub.id}
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-auto justify-start whitespace-normal py-2 text-left"
+                    onClick={() => onSelectSubQuestion?.(sub.id)}
+                  >
+                    <span className="font-medium">{sub.outlineTitle || `(${String.fromCharCode(96 + sub.number)})`}</span>
+                    <span className="ml-2">{questionOutlineLabel(sub, 64) || '(Untitled part)'}</span>
+                    <Badge variant="outline" className="ml-auto shrink-0">
+                      {sub.points}pts
+                    </Badge>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
           {/* Add Sub-question Button */}
           <Button
             variant="outline"
